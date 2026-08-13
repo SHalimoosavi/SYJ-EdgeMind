@@ -1,0 +1,13 @@
+# Normalize line endings
+* text=auto eol=lf
+
+# Windows scripts keep CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Never treat model weights as text / never diff them
+*.gguf binary
+*.bin binary
+
+# Don't let GitHub's linguist count vendored third-party code against project stats
+third_party/** linguist-vendored

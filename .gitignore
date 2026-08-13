@@ -1,0 +1,55 @@
+# Build output
+build/
+out/
+cmake-build-*/
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+_deps/
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.suo
+
+# Xcode / iOS
+platform/ios/**/*.xcuserstate
+platform/ios/**/xcuserdata/
+platform/ios/**/DerivedData/
+platform/ios/**/*.xcworkspace/xcuserdata/
+
+# Models — never commit weights
+models/*.gguf
+models/downloads/
+*.gguf
+
+# Third-party pulled sources (fetched by scripts, not vendored in git)
+third_party/llama.cpp/*
+!third_party/llama.cpp/.gitkeep
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / local config
+*.log
+.env
+config.local.*
