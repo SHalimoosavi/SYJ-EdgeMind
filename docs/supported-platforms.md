@@ -1,19 +1,40 @@
 # Supported Platforms
 
-**Status: Phase 0 — nothing builds or runs yet.** This tracks what is actually supported as phases land; it is not a promise of future support beyond what's listed here.
+**Status: Phase 1 — native runtime implemented; platform-specific validation is still in progress.**
 
-## Windows (planned: Phase 5)
+This document tracks what is **actually implemented and verified**, rather than
+what is merely planned on the roadmap.
 
-- Target: x64, Windows 10+/11, CPU-only
-- Toolchain: CMake + MSVC (Visual Studio build tools, command-line build preferred over requiring the VS GUI)
-- CPU feature detection (AVX/AVX2) at build/runtime — the build must never emit instructions the target CPU can't execute
+## Current Status
 
-## iOS (planned: Phase 6–7)
+| Platform | Phase | Status |
+|---|---:|---|
+| Linux / development environment | 1 | Native runtime code implemented; direct source-level validation completed |
+| Windows x64 | 5 | Planned |
+| iOS | 6/7 | Planned |
+| Android | — | Not currently a target |
 
-- Target: ARM64
-- Toolchain: Swift + Objective-C++ bridge over the shared C API + llama.cpp
-- Respects iOS sandboxing (app-scoped storage only), handles memory pressure and app lifecycle events, no background-execution assumptions
+## Phase 1 — Native Runtime
 
-## Not currently planned
+SYJ EdgeMind currently provides a platform-independent native C++ inference
+core built around llama.cpp.
 
-GPU acceleration (CUDA/ROCm/Metal/DirectML) is explicitly out of scope for the default path — CPU-only must work standalone. Optional hardware acceleration may be considered later, but is not part of the current roadmap.
+The core includes:
+
+- Runtime lifecycle
+- Runtime configuration
+- GGUF model loading through llama.cpp
+- Tokenization
+- Context management
+- Token sampling
+- Native inference engine
+- Stable C API
+- CLI entry point
+- Unit tests
+- Invalid-model-path integration test
+
+The llama.cpp dependency is pinned to:
+
+```text
+Tag:    b10375
+Commit: ba360ef

@@ -4,8 +4,8 @@ SYJ EdgeMind is built one phase at a time. A phase is not started until the prev
 
 | Phase | Name | Acceptance Criterion | Status |
 |---|---|---|---|
-| 0 | Architecture & Repository Bootstrap | Repo skeleton, docs skeleton, CMake foundation, and dependency strategy exist | **In progress** |
-| 1 | Native llama.cpp Runtime | A local GGUF model can be loaded and can generate text | Not started |
+| 0 | Architecture & Repository Bootstrap | Repo skeleton, docs skeleton, CMake foundation, and dependency strategy exist | **Done** |
+| 1 | Native llama.cpp Runtime | A local GGUF model can be loaded and can generate text | **Implemented; not yet build-verified against real llama.cpp/a real model (no sandbox network access) — see docs/development.md** |
 | 2 | Memory Safety Engine | Runtime refuses unsafe configurations rather than crashing or exhausting RAM | Not started |
 | 3 | Model Registry & Verification | A user can safely acquire/import a GGUF model and verify it before inference | Not started |
 | 4 | Production CLI | A technically non-expert user can run local inference with minimal configuration | Not started |

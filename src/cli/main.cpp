@@ -1,0 +1,230 @@
+// SYJ EdgeMind CLI.
+//
+// Deliberately includes ONLY the public C API header — no llama.h, no
+// internal SYJ EdgeMind C++ headers. This is what "platform code doesn't
+// know llama.cpp internals" means in practice (Phase 1 spec §15/§25); the
+// Windows platform layer (Phase 5) will wrap this same C API, not a
+// different one.
+
+#include "api/edge_mind_api.h"
+
+#include <cstdio>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <thread>
+
+namespace {
+
+void print_usage(const char* argv0) {
+    std::printf(
+        "SYJ EdgeMind — Private, Offline AI for Low-Memory Devices.\n\n"
+        "Usage:\n"
+        "  %s --model <path.gguf> [options] [\"prompt\"]\n\n"
+        "Options:\n"
+        "  --model <path>         Path to a local GGUF model file (required)\n"
+        "  --context <n>          Context size in tokens (default: 1024)\n"
+        "  --threads <n>          CPU threads (default: hardware concurrency, min 1)\n"
+        "  --temperature <f>      Sampling temperature (default: 0.7)\n"
+        "  --top-p <f>            Nucleus sampling threshold (default: 0.9)\n"
+        "  --top-k <n>            Top-k sampling cutoff (default: 40)\n"
+        "  --max-tokens <n>       Maximum tokens to generate (default: 256)\n"
+        "  -h, --help             Show this help and exit\n\n"
+        "If a prompt is given as a trailing argument, SYJ EdgeMind generates a\n"
+        "single response and exits. Otherwise it starts interactive mode:\n"
+        "  /help    show interactive commands\n"
+        "  /info    show loaded model info\n"
+        "  /reset   clear the context and start fresh\n"
+        "  /quit    exit\n",
+        argv0);
+}
+
+bool parse_float_arg(const char* s, float* out) {
+    if (s == nullptr) return false;
+    char* end = nullptr;
+    const float v = std::strtof(s, &end);
+    if (end == s || *end != '\0') return false;
+    *out = v;
+    return true;
+}
+
+bool parse_int_arg(const char* s, int32_t* out) {
+    if (s == nullptr) return false;
+    char* end = nullptr;
+    const long v = std::strtol(s, &end, 10);
+    if (end == s || *end != '\0') return false;
+    *out = static_cast<int32_t>(v);
+    return true;
+}
+
+int stream_to_stdout(const char* piece, void* /*user_data*/) {
+    std::fputs(piece, stdout);
+    std::fflush(stdout);
+    return 1; // continue
+}
+
+void print_model_info(syj_edgemind_runtime* rt) {
+    syj_edgemind_model_info info;
+    if (syj_edgemind_get_model_info(rt, &info) != 0) {
+        std::printf("No model info available.\n");
+        return;
+    }
+    std::printf(
+        "Model:         %s\n"
+        "Parameters:    %llu\n"
+        "Size on disk:  %.1f MB\n"
+        "Trained ctx:   %d\n"
+        "Active ctx:    %d\n"
+        "Threads:       %d\n",
+        info.description,
+        static_cast<unsigned long long>(info.n_params),
+        static_cast<double>(info.model_size_bytes) / (1024.0 * 1024.0),
+        info.n_ctx_train,
+        info.n_ctx,
+        info.n_threads);
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    syj_edgemind_config config;
+    syj_edgemind_default_config(&config);
+
+    std::string model_path;
+    std::string trailing_prompt;
+    bool have_trailing_prompt = false;
+
+    unsigned hw_threads = std::thread::hardware_concurrency();
+    if (hw_threads > 0) {
+        config.threads = static_cast<int32_t>(hw_threads);
+    }
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+
+        auto next = [&](const char* flag) -> const char* {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "ERROR: %s requires a value.\n", flag);
+                std::exit(2);
+            }
+            return argv[++i];
+        };
+
+        if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return 0;
+        } else if (arg == "--model") {
+            model_path = next("--model");
+        } else if (arg == "--context") {
+            if (!parse_int_arg(next("--context"), &config.context_size)) {
+                std::fprintf(stderr, "ERROR: --context expects an integer.\n");
+                return 2;
+            }
+        } else if (arg == "--threads") {
+            if (!parse_int_arg(next("--threads"), &config.threads)) {
+                std::fprintf(stderr, "ERROR: --threads expects an integer.\n");
+                return 2;
+            }
+        } else if (arg == "--temperature") {
+            if (!parse_float_arg(next("--temperature"), &config.temperature)) {
+                std::fprintf(stderr, "ERROR: --temperature expects a float.\n");
+                return 2;
+            }
+        } else if (arg == "--top-p") {
+            if (!parse_float_arg(next("--top-p"), &config.top_p)) {
+                std::fprintf(stderr, "ERROR: --top-p expects a float.\n");
+                return 2;
+            }
+        } else if (arg == "--top-k") {
+            if (!parse_int_arg(next("--top-k"), &config.top_k)) {
+                std::fprintf(stderr, "ERROR: --top-k expects an integer.\n");
+                return 2;
+            }
+        } else if (arg == "--max-tokens") {
+            if (!parse_int_arg(next("--max-tokens"), &config.max_tokens)) {
+                std::fprintf(stderr, "ERROR: --max-tokens expects an integer.\n");
+                return 2;
+            }
+        } else if (!arg.empty() && arg[0] != '-') {
+            trailing_prompt = arg;
+            have_trailing_prompt = true;
+        } else {
+            std::fprintf(stderr, "ERROR: Unrecognized argument: %s\n", arg.c_str());
+            print_usage(argv[0]);
+            return 2;
+        }
+    }
+
+    if (model_path.empty()) {
+        std::fprintf(stderr, "ERROR: --model is required.\n\n");
+        print_usage(argv[0]);
+        return 2;
+    }
+    config.model_path = model_path.c_str();
+
+    std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d\n\n",
+                config.context_size, config.threads);
+    std::printf("Loading model: %s ...\n", model_path.c_str());
+
+    syj_edgemind_status status = SYJ_EDGEMIND_OK;
+    syj_edgemind_runtime* rt = syj_edgemind_create(&config, &status);
+    if (rt == nullptr) {
+        std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(status));
+        if (status == SYJ_EDGEMIND_ERROR_MODEL_NOT_FOUND) {
+            std::fprintf(stderr, "  %s\n", model_path.c_str());
+        }
+        return 1;
+    }
+    std::printf("Model loaded.\n\n");
+
+    if (have_trailing_prompt) {
+        std::printf("You:\n%s\n\nSYJ EdgeMind:\n", trailing_prompt.c_str());
+        const syj_edgemind_status gen_status =
+            syj_edgemind_generate(rt, trailing_prompt.c_str(), stream_to_stdout, nullptr);
+        std::printf("\n");
+        if (gen_status != SYJ_EDGEMIND_OK) {
+            std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(gen_status));
+            syj_edgemind_destroy(rt);
+            return 1;
+        }
+        syj_edgemind_destroy(rt);
+        return 0;
+    }
+
+    // Interactive mode.
+    std::string line;
+    while (true) {
+        std::printf("You:\n");
+        if (!std::getline(std::cin, line)) {
+            break; // EOF / user interruption
+        }
+
+        if (line == "/quit") {
+            break;
+        } else if (line == "/help") {
+            std::printf("Commands: /help  /info  /reset  /quit\n");
+            continue;
+        } else if (line == "/info") {
+            print_model_info(rt);
+            continue;
+        } else if (line == "/reset") {
+            syj_edgemind_reset(rt);
+            std::printf("Context reset.\n");
+            continue;
+        } else if (line.empty()) {
+            continue;
+        }
+
+        std::printf("\nSYJ EdgeMind:\n");
+        const syj_edgemind_status gen_status = syj_edgemind_generate(rt, line.c_str(), stream_to_stdout, nullptr);
+        std::printf("\n\n");
+        if (gen_status != SYJ_EDGEMIND_OK) {
+            std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(gen_status));
+            // Per Phase 1 spec §14: do not continue with an invalid runtime.
+            break;
+        }
+    }
+
+    syj_edgemind_destroy(rt);
+    return 0;
+}
