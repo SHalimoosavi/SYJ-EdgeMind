@@ -21,6 +21,7 @@ enum class EngineError {
     ContextCreateFailed,
     TokenizeFailed,
     DecodeFailed,
+    MemoryBudgetExceeded,
 };
 
 const char* engine_error_message(EngineError err);
@@ -79,13 +80,21 @@ public:
     };
     ModelInfo model_info() const;
 
+    // The full Phase 2 memory-budget diagnostic from the most recent load()
+    // attempt (populated whether the load succeeded or was rejected for
+    // exceeding the budget). Empty if load() has never been called.
+    const std::string& memory_diagnostic() const { return memory_diagnostic_; }
+
 private:
+    void unload();
+
     llama_model* model_ = nullptr;
     llama_context* ctx_ = nullptr;
     std::unique_ptr<Tokenizer> tokenizer_;
     std::unique_ptr<ContextManager> context_manager_;
     RuntimeConfig config_;
     bool backend_initialized_ = false;
+    std::string memory_diagnostic_;
 };
 
 } // namespace syj::edgemind

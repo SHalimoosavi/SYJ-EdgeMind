@@ -29,6 +29,7 @@ typedef enum syj_edgemind_status {
     SYJ_EDGEMIND_ERROR_TOKENIZE_FAILED = 5,
     SYJ_EDGEMIND_ERROR_DECODE_FAILED = 6,
     SYJ_EDGEMIND_ERROR_NOT_LOADED = 7,
+    SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED = 8,
 } syj_edgemind_status;
 
 typedef struct syj_edgemind_config {
@@ -39,6 +40,8 @@ typedef struct syj_edgemind_config {
     float top_p;
     int32_t top_k;
     int32_t max_tokens;
+    int64_t memory_budget_mb;   // Phase 2; 0 means "use SYJ EdgeMind's default"
+    int64_t safety_reserve_mb;  // Phase 2; 0 means "use SYJ EdgeMind's default"
 } syj_edgemind_config;
 
 // Fills `out_config` with SYJ EdgeMind's built-in Phase 1 defaults
@@ -49,6 +52,14 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config);
 
 // Creates and loads a runtime. Returns NULL on failure; if out_status is
 // non-NULL, it is set to the specific failure reason.
+//
+// SPECIAL CASE: if the failure is SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED,
+// the returned pointer is NOT NULL — the runtime handle is kept alive
+// specifically so the caller can retrieve the detailed diagnostic via
+// syj_edgemind_get_memory_report() before calling syj_edgemind_destroy().
+// is_ready()-equivalent operations (generate, model info) will still fail
+// with SYJ_EDGEMIND_ERROR_NOT_LOADED on this handle; it exists only to carry
+// the diagnostic out. Every other failure reason returns NULL as usual.
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
                                            syj_edgemind_status* out_status);
 
@@ -80,6 +91,14 @@ typedef struct syj_edgemind_model_info {
 
 // Returns 0 on success, non-zero if runtime is NULL/not loaded.
 int syj_edgemind_get_model_info(const syj_edgemind_runtime* runtime, syj_edgemind_model_info* out_info);
+
+// Writes the Phase 2 memory-budget diagnostic (human-readable, matches the
+// STATUS: SAFE/UNSAFE format in docs/memory-model.md) from the most recent
+// load attempt into `out_buf` (truncated to fit `buf_size`, always
+// NUL-terminated if buf_size > 0). Returns the number of bytes that would
+// have been written (excluding the NUL terminator), like snprintf — 0 if no
+// report is available yet.
+size_t syj_edgemind_get_memory_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size);
 
 // Human-readable string for a status code. Owned by SYJ EdgeMind; do not free.
 const char* syj_edgemind_status_message(syj_edgemind_status status);

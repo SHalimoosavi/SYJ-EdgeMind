@@ -29,11 +29,15 @@ void print_usage(const char* argv0) {
         "  --top-p <f>            Nucleus sampling threshold (default: 0.9)\n"
         "  --top-k <n>            Top-k sampling cutoff (default: 40)\n"
         "  --max-tokens <n>       Maximum tokens to generate (default: 256)\n"
+        "  --memory-budget <mb>   Memory budget in MB (default: 3000)\n"
+        "  --safety-reserve <mb>  Memory safety reserve in MB, held back from the\n"
+        "                         budget and never allocated toward (default: 300)\n"
         "  -h, --help             Show this help and exit\n\n"
         "If a prompt is given as a trailing argument, SYJ EdgeMind generates a\n"
         "single response and exits. Otherwise it starts interactive mode:\n"
         "  /help    show interactive commands\n"
         "  /info    show loaded model info\n"
+        "  /memory  show the memory-budget diagnostic from the last load\n"
         "  /reset   clear the context and start fresh\n"
         "  /quit    exit\n",
         argv0);
@@ -54,6 +58,15 @@ bool parse_int_arg(const char* s, int32_t* out) {
     const long v = std::strtol(s, &end, 10);
     if (end == s || *end != '\0') return false;
     *out = static_cast<int32_t>(v);
+    return true;
+}
+
+bool parse_int64_arg(const char* s, int64_t* out) {
+    if (s == nullptr) return false;
+    char* end = nullptr;
+    const long long v = std::strtoll(s, &end, 10);
+    if (end == s || *end != '\0') return false;
+    *out = static_cast<int64_t>(v);
     return true;
 }
 
@@ -82,6 +95,17 @@ void print_model_info(syj_edgemind_runtime* rt) {
         info.n_ctx_train,
         info.n_ctx,
         info.n_threads);
+}
+
+void print_memory_report(const syj_edgemind_runtime* rt) {
+    const size_t needed = syj_edgemind_get_memory_report(rt, nullptr, 0);
+    if (needed == 0) {
+        std::printf("No memory report available.\n");
+        return;
+    }
+    std::string buf(needed + 1, '\0');
+    syj_edgemind_get_memory_report(rt, buf.data(), buf.size());
+    std::printf("%s\n", buf.c_str());
 }
 
 } // namespace
@@ -145,6 +169,16 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "ERROR: --max-tokens expects an integer.\n");
                 return 2;
             }
+        } else if (arg == "--memory-budget") {
+            if (!parse_int64_arg(next("--memory-budget"), &config.memory_budget_mb)) {
+                std::fprintf(stderr, "ERROR: --memory-budget expects an integer (MB).\n");
+                return 2;
+            }
+        } else if (arg == "--safety-reserve") {
+            if (!parse_int64_arg(next("--safety-reserve"), &config.safety_reserve_mb)) {
+                std::fprintf(stderr, "ERROR: --safety-reserve expects an integer (MB).\n");
+                return 2;
+            }
         } else if (!arg.empty() && arg[0] != '-') {
             trailing_prompt = arg;
             have_trailing_prompt = true;
@@ -162,12 +196,22 @@ int main(int argc, char** argv) {
     }
     config.model_path = model_path.c_str();
 
-    std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d\n\n",
-                config.context_size, config.threads);
+    std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d   Memory budget: %lld MB (reserve %lld MB)\n\n",
+                config.context_size, config.threads,
+                static_cast<long long>(config.memory_budget_mb),
+                static_cast<long long>(config.safety_reserve_mb));
     std::printf("Loading model: %s ...\n", model_path.c_str());
 
     syj_edgemind_status status = SYJ_EDGEMIND_OK;
     syj_edgemind_runtime* rt = syj_edgemind_create(&config, &status);
+
+    if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED) {
+        std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(status));
+        print_memory_report(rt);
+        syj_edgemind_destroy(rt); // kept alive by create() specifically to allow this
+        return 1;
+    }
+
     if (rt == nullptr) {
         std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(status));
         if (status == SYJ_EDGEMIND_ERROR_MODEL_NOT_FOUND) {
@@ -202,10 +246,13 @@ int main(int argc, char** argv) {
         if (line == "/quit") {
             break;
         } else if (line == "/help") {
-            std::printf("Commands: /help  /info  /reset  /quit\n");
+            std::printf("Commands: /help  /info  /memory  /reset  /quit\n");
             continue;
         } else if (line == "/info") {
             print_model_info(rt);
+            continue;
+        } else if (line == "/memory") {
+            print_memory_report(rt);
             continue;
         } else if (line == "/reset") {
             syj_edgemind_reset(rt);

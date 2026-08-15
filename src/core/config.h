@@ -37,6 +37,16 @@ struct RuntimeConfig {
     int top_k = 40;
     int max_tokens = 256;
 
+    // Phase 2: configured memory budget and safety reserve, in megabytes.
+    // Defaults follow docs/memory-model.md's illustrative 4GB-device budget
+    // (~3000 MB usable, 300 MB held back as reserve) — documented defaults,
+    // not invented numbers; override for devices with more or less RAM.
+    int64_t memory_budget_mb = 3000;
+    int64_t safety_reserve_mb = 300;
+
+    static constexpr int64_t SYJ_EDGEMIND_MIN_MEMORY_BUDGET_MB = 256;
+    static constexpr int64_t SYJ_EDGEMIND_MAX_MEMORY_BUDGET_MB = 131072; // 128 GB sanity ceiling
+
     // Hard ceiling Phase 1 refuses to exceed, independent of any future
     // memory-budget engine. This is a basic "prevent obviously unbounded
     // context allocation" guard required by the Phase 1 spec (§8), not a

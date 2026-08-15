@@ -85,6 +85,56 @@ int main() {
         check(!validate_config(cfg).empty(), "max_tokens == 0 should be rejected");
     }
 
+    // memory_budget_mb out of the supported sane range is rejected.
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.memory_budget_mb = 1; // below SYJ_EDGEMIND_MIN_MEMORY_BUDGET_MB
+        check(!validate_config(cfg).empty(), "memory_budget_mb below the minimum should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.memory_budget_mb = 999'999'999; // absurdly large
+        check(!validate_config(cfg).empty(), "memory_budget_mb above the maximum should be rejected");
+    }
+
+    // safety_reserve_mb must be non-negative.
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.safety_reserve_mb = -1;
+        check(!validate_config(cfg).empty(), "negative safety_reserve_mb should be rejected");
+    }
+
+    // safety_reserve_mb must be strictly less than memory_budget_mb —
+    // reserve == budget and reserve > budget are both rejected at the
+    // config layer (MemoryBudgetPolicy defends against this reaching it
+    // anyway, but the config validation is the first line of defense).
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.memory_budget_mb = 3000;
+        cfg.safety_reserve_mb = 3000; // equal
+        check(!validate_config(cfg).empty(), "safety_reserve_mb == memory_budget_mb should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.memory_budget_mb = 3000;
+        cfg.safety_reserve_mb = 4000; // greater
+        check(!validate_config(cfg).empty(), "safety_reserve_mb > memory_budget_mb should be rejected");
+    }
+
+    // A valid, non-default memory-budget configuration passes.
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.memory_budget_mb = 2048;
+        cfg.safety_reserve_mb = 256;
+        check(validate_config(cfg).empty(), "a sane, valid memory-budget configuration should pass");
+    }
+
     if (g_failures > 0) {
         std::fprintf(stderr, "%d check(s) failed.\n", g_failures);
         return EXIT_FAILURE;

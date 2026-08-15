@@ -6,6 +6,7 @@
 
 using syj::edgemind::Runtime;
 using syj::edgemind::RuntimeConfig;
+using syj::edgemind::RuntimeError;
 
 struct syj_edgemind_runtime {
     Runtime runtime;
@@ -35,45 +36,34 @@ RuntimeConfig to_cpp_config(const syj_edgemind_config* c) {
     if (c->max_tokens > 0) {
         config.max_tokens = c->max_tokens;
     }
+    if (c->memory_budget_mb > 0) {
+        config.memory_budget_mb = c->memory_budget_mb;
+    }
+    if (c->safety_reserve_mb > 0) {
+        config.safety_reserve_mb = c->safety_reserve_mb;
+    }
     return config;
 }
 
-// Best-effort classification of a Runtime::load()/generate() error string
-// into a stable status code for C callers. The authoritative mapping lives
-// in InferenceEngine/EngineError; this exists only because the C API must
-// not leak the C++ EngineError enum or std::string across the boundary.
-syj_edgemind_status classify_error(const std::string& msg) {
-    if (msg.empty()) {
-        return SYJ_EDGEMIND_OK;
+// Explicit, exhaustive RuntimeError -> syj_edgemind_status mapping — a
+// direct enum-to-enum switch, not string inspection. Every RuntimeError
+// value is handled; there is no fallback branch to fall silently through,
+// so adding a new RuntimeError without updating this function is a compiler
+// warning (and, with warnings-as-strict per the project's build config, a
+// build failure), not a silent misclassification.
+syj_edgemind_status to_c_status(RuntimeError err) {
+    switch (err) {
+        case RuntimeError::None:                 return SYJ_EDGEMIND_OK;
+        case RuntimeError::InvalidConfig:        return SYJ_EDGEMIND_ERROR_INVALID_CONFIG;
+        case RuntimeError::ModelFileNotFound:    return SYJ_EDGEMIND_ERROR_MODEL_NOT_FOUND;
+        case RuntimeError::ModelLoadFailed:      return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED;
+        case RuntimeError::ContextCreateFailed:  return SYJ_EDGEMIND_ERROR_CONTEXT_CREATE_FAILED;
+        case RuntimeError::TokenizeFailed:       return SYJ_EDGEMIND_ERROR_TOKENIZE_FAILED;
+        case RuntimeError::DecodeFailed:         return SYJ_EDGEMIND_ERROR_DECODE_FAILED;
+        case RuntimeError::MemoryBudgetExceeded: return SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED;
+        case RuntimeError::NotLoaded:            return SYJ_EDGEMIND_ERROR_NOT_LOADED;
     }
-    if (msg.find("Model path must not be empty") != std::string::npos ||
-        msg.find("Context size") != std::string::npos ||
-        msg.find("Thread count") != std::string::npos ||
-        msg.find("Temperature") != std::string::npos ||
-        msg.find("top_p") != std::string::npos ||
-        msg.find("top_k") != std::string::npos ||
-        msg.find("max_tokens") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_INVALID_CONFIG;
-    }
-    if (msg.find("does not exist") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_MODEL_NOT_FOUND;
-    }
-    if (msg.find("Failed to load GGUF model") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED;
-    }
-    if (msg.find("Failed to create inference context") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_CONTEXT_CREATE_FAILED;
-    }
-    if (msg.find("Failed to tokenize") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_TOKENIZE_FAILED;
-    }
-    if (msg.find("Inference failed") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_DECODE_FAILED;
-    }
-    if (msg.find("not loaded") != std::string::npos) {
-        return SYJ_EDGEMIND_ERROR_NOT_LOADED;
-    }
-    return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED; // conservative fallback, never silently OK
+    return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED; // unreachable if RuntimeError is exhaustive above
 }
 
 } // namespace
@@ -90,21 +80,43 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config) {
     out_config->top_p = defaults.top_p;
     out_config->top_k = defaults.top_k;
     out_config->max_tokens = defaults.max_tokens;
+    out_config->memory_budget_mb = defaults.memory_budget_mb;
+    out_config->safety_reserve_mb = defaults.safety_reserve_mb;
 }
 
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
                                            syj_edgemind_status* out_status) {
     auto* handle = new syj_edgemind_runtime();
-    const std::string err = handle->runtime.load(to_cpp_config(config));
-    const syj_edgemind_status status = classify_error(err);
+    handle->runtime.load(to_cpp_config(config)); // message discarded; status comes from last_error()
+    const syj_edgemind_status status = to_c_status(handle->runtime.last_error());
     if (out_status != nullptr) {
         *out_status = status;
     }
-    if (status != SYJ_EDGEMIND_OK) {
-        delete handle;
-        return nullptr;
+    if (status == SYJ_EDGEMIND_OK) {
+        return handle;
     }
-    return handle;
+    if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED) {
+        // Kept alive on purpose — see header comment on syj_edgemind_create.
+        return handle;
+    }
+    delete handle;
+    return nullptr;
+}
+
+size_t syj_edgemind_get_memory_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size) {
+    if (runtime == nullptr) {
+        if (buf_size > 0 && out_buf != nullptr) {
+            out_buf[0] = '\0';
+        }
+        return 0;
+    }
+    const std::string report = runtime->runtime.memory_report();
+    if (buf_size > 0 && out_buf != nullptr) {
+        const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
+        std::memcpy(out_buf, report.data(), to_copy);
+        out_buf[to_copy] = '\0';
+    }
+    return report.size();
 }
 
 syj_edgemind_status syj_edgemind_generate(syj_edgemind_runtime* runtime,
@@ -116,7 +128,7 @@ syj_edgemind_status syj_edgemind_generate(syj_edgemind_runtime* runtime,
     }
     const std::string prompt_str = (prompt != nullptr) ? prompt : "";
 
-    const std::string err = runtime->runtime.generate(prompt_str,
+    runtime->runtime.generate(prompt_str,
         [on_token, user_data](const std::string& piece) -> bool {
             if (on_token == nullptr) {
                 return true;
@@ -124,7 +136,7 @@ syj_edgemind_status syj_edgemind_generate(syj_edgemind_runtime* runtime,
             return on_token(piece.c_str(), user_data) != 0;
         });
 
-    return classify_error(err);
+    return to_c_status(runtime->runtime.last_error());
 }
 
 void syj_edgemind_reset(syj_edgemind_runtime* runtime) {
@@ -161,6 +173,7 @@ const char* syj_edgemind_status_message(syj_edgemind_status status) {
         case SYJ_EDGEMIND_ERROR_TOKENIZE_FAILED:       return "Failed to tokenize prompt.";
         case SYJ_EDGEMIND_ERROR_DECODE_FAILED:         return "Inference failed.";
         case SYJ_EDGEMIND_ERROR_NOT_LOADED:            return "Runtime is not loaded.";
+        case SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED: return "Configuration exceeds the configured memory budget.";
     }
     return "Unknown status.";
 }

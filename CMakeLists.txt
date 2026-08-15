@@ -6,323 +6,132 @@ project(SYJEdgeMind
     LANGUAGES C CXX
 )
 
-# ============================================================================
-# SYJ EdgeMind — Phase 1
-# Native llama.cpp Runtime
+# ---------------------------------------------------------------------------
+# Phase 2 status: Native llama.cpp Runtime (Phase 1) + Memory Safety Engine
+# (Phase 2).
 #
-# This phase establishes the first real native inference path.
-#
-# Design principles:
-#   - CPU-first
-#   - Offline inference
-#   - GGUF models
-#   - llama.cpp as the inference dependency
-#   - Exact llama.cpp tag pin
-#   - No tracking of upstream main/master
-#   - No model weights in this repository
-#   - No generated dependency sources in the Git working tree
-#
-# IMPORTANT:
-# Phase 1 does NOT yet implement the complete 4 GB memory-budget system.
-# Memory estimation/enforcement is a Phase 2 responsibility.
-# ============================================================================
+# llama.cpp is fetched at the exact pinned tag recorded in docs/architecture.md
+# (b10375). This repository does NOT vendor llama.cpp's source in git — it is
+# fetched reproducibly at configure time via FetchContent, pinned to that tag,
+# never to `main`, landing in the build tree's own dependency area rather
+# than inside the repository working tree. See third_party/README.md.
+# ---------------------------------------------------------------------------
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
 
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING
-        "Build type"
-        FORCE
-    )
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set_property(
-    CACHE CMAKE_BUILD_TYPE
-    PROPERTY STRINGS
-        Debug
-        Release
-        RelWithDebInfo
-        MinSizeRel
-)
+option(SYJ_EDGEMIND_BUILD_TESTS "Build test suite" ON)
+option(SYJ_EDGEMIND_BUILD_CLI "Build the syj-edgemind CLI executable" ON)
+option(SYJ_EDGEMIND_ENABLE_WARNINGS "Enable strict warnings (-Wall -Wextra -Wpedantic / MSVC equivalent)" ON)
+option(SYJ_EDGEMIND_USE_SYSTEM_LLAMA "Use an already-configured llama.cpp target instead of FetchContent (advanced/offline builds)" OFF)
 
-# ============================================================================
-# Build options
-# ============================================================================
-
-option(
-    SYJ_EDGEMIND_BUILD_TESTS
-    "Build SYJ EdgeMind test suite"
-    ON
-)
-
-option(
-    SYJ_EDGEMIND_BUILD_CLI
-    "Build the syj-edgemind command-line interface"
-    ON
-)
-
-option(
-    SYJ_EDGEMIND_ENABLE_WARNINGS
-    "Enable strict compiler warnings"
-    ON
-)
-
-option(
-    SYJ_EDGEMIND_USE_SYSTEM_LLAMA
-    "Use an already configured llama.cpp target instead of FetchContent"
-    OFF
-)
-
-# ============================================================================
-# Compiler warnings
-# ============================================================================
+# Pinned per docs/architecture.md — "llama.cpp version pinning". Defined
+# unconditionally (not just inside the FetchContent branch below) so it's
+# available for logging/diagnostics regardless of
+# SYJ_EDGEMIND_USE_SYSTEM_LLAMA. Do NOT change this to a branch (e.g.
+# "master"). Bumping the pin is a deliberate, reviewed change to both this
+# file and docs/architecture.md.
+set(SYJ_EDGEMIND_LLAMA_CPP_TAG "b10375")
 
 add_library(syj_edgemind_warnings INTERFACE)
-
 if(SYJ_EDGEMIND_ENABLE_WARNINGS)
-
     if(MSVC)
-
-        target_compile_options(
-            syj_edgemind_warnings
-            INTERFACE
-                /W4
-            )
-
+        target_compile_options(syj_edgemind_warnings INTERFACE /W4)
     else()
-
-        target_compile_options(
-            syj_edgemind_warnings
-            INTERFACE
-                -Wall
-                -Wextra
-                -Wpedantic
-            )
-
+        target_compile_options(syj_edgemind_warnings INTERFACE -Wall -Wextra -Wpedantic)
     endif()
-
 endif()
 
-# ============================================================================
-# llama.cpp dependency
-# ============================================================================
-#
-# The dependency is deliberately fetched into CMake's build/dependency area.
-#
-# It is NOT vendored into:
-#
-#     third_party/llama.cpp/
-#
-# and must NOT be committed to the SYJ EdgeMind repository.
-#
-# The exact tag is pinned for reproducibility.
-# Never change this to a branch such as main/master.
-#
-# Any dependency upgrade must be a deliberate reviewed change accompanied by
-# an update to docs/architecture.md.
-# ============================================================================
-
-set(
-    SYJ_EDGEMIND_LLAMA_CPP_TAG
-    "b10375"
-    CACHE STRING
-    "Pinned llama.cpp release tag"
-)
-
+# ---------------------------------------------------------------------------
+# llama.cpp dependency (pinned)
+# ---------------------------------------------------------------------------
 if(NOT SYJ_EDGEMIND_USE_SYSTEM_LLAMA)
-
     include(FetchContent)
 
-    # ------------------------------------------------------------------------
-    # Disable unnecessary llama.cpp components.
-    #
-    # SYJ EdgeMind only requires the native llama inference library.
-    # Examples, tools, server, tests and curl integration are not part of the
-    # SYJ EdgeMind inference path.
-    # ------------------------------------------------------------------------
-
-    set(LLAMA_BUILD_COMMON
-        OFF
-        CACHE BOOL
-        "Build llama.cpp common library"
-        FORCE
-    )
-
-    set(LLAMA_BUILD_EXAMPLES
-        OFF
-        CACHE BOOL
-        "Build llama.cpp examples"
-        FORCE
-    )
-
-    set(LLAMA_BUILD_TESTS
-        OFF
-        CACHE BOOL
-        "Build llama.cpp tests"
-        FORCE
-    )
-
-    set(LLAMA_BUILD_TOOLS
-        OFF
-        CACHE BOOL
-        "Build llama.cpp tools"
-        FORCE
-    )
-
-    set(LLAMA_BUILD_SERVER
-        OFF
-        CACHE BOOL
-        "Build llama.cpp server"
-        FORCE
-    )
-
-    set(LLAMA_CURL
-        OFF
-        CACHE BOOL
-        "Enable CURL support"
-        FORCE
-    )
+    # llama.cpp's own CMake build produces many optional example/tool targets
+    # and a server; SYJ EdgeMind only needs the `llama` and `ggml` libraries.
+    set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+    set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
 
     FetchContent_Declare(
         llama_cpp
-        GIT_REPOSITORY
-            https://github.com/ggml-org/llama.cpp.git
-        GIT_TAG
-            ${SYJ_EDGEMIND_LLAMA_CPP_TAG}
-        GIT_SHALLOW
-            TRUE
+        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+        GIT_TAG        ${SYJ_EDGEMIND_LLAMA_CPP_TAG}
+        GIT_SHALLOW    TRUE
+        # Deliberately NOT setting SOURCE_DIR to third_party/llama.cpp:
+        # doing so would vendor a full llama.cpp checkout into the repo
+        # working tree (even though .gitignore excludes it from commits,
+        # it would still sit inside the project directory, be picked up
+        # by tools that scan the tree, and blur the "fetched dependency"
+        # vs. "our code" boundary). Leaving SOURCE_DIR unset lets
+        # FetchContent use its default location under build/_deps/, which
+        # is exactly where a CMake-fetched dependency belongs. third_party/
+        # remains reserved for a future SYJ_EDGEMIND_USE_SYSTEM_LLAMA-style
+        # manually-vendored build if that's ever needed (see third_party/README.md).
     )
-
     FetchContent_MakeAvailable(llama_cpp)
-
 endif()
 
-# ============================================================================
-# Validate the expected llama.cpp target
-# ============================================================================
-
-if(NOT TARGET llama)
-
-    message(
-        FATAL_ERROR
-        "SYJ EdgeMind requires the llama.cpp CMake target 'llama'. "
-        "The configured llama.cpp dependency did not provide it."
-    )
-
-endif()
-
-# ============================================================================
-# SYJ EdgeMind core runtime
-# ============================================================================
-#
-# There is exactly one inference core.
-#
-# Platform-specific implementations must call the public C API rather than
-# implementing their own inference logic.
-# ============================================================================
-
-add_library(
-    syj-edgemind-core
-    STATIC
-
+# ---------------------------------------------------------------------------
+# SYJ EdgeMind core runtime library
+# ---------------------------------------------------------------------------
+add_library(syj-edgemind-core STATIC
     src/core/config.cpp
     src/core/runtime.cpp
-
     src/tokenizer/tokenizer.cpp
-
     src/context/context_manager.cpp
-
+    src/memory/memory_estimator.cpp
+    src/memory/memory_budget.cpp
+    src/memory/memory_observer.cpp
     src/inference/inference_engine.cpp
     src/inference/sampler.cpp
-
     src/api/edge_mind_api.cpp
 )
 
-target_include_directories(
-    syj-edgemind-core
+target_include_directories(syj-edgemind-core
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
 )
 
-target_compile_features(
-    syj-edgemind-core
-    PUBLIC
-        cxx_std_17
-)
-
-target_link_libraries(
-    syj-edgemind-core
+target_link_libraries(syj-edgemind-core
     PUBLIC
         llama
-
     PRIVATE
         syj_edgemind_warnings
 )
 
-# ============================================================================
+target_compile_features(syj-edgemind-core PUBLIC cxx_std_17)
+
+# ---------------------------------------------------------------------------
 # CLI
-# ============================================================================
-
+# ---------------------------------------------------------------------------
 if(SYJ_EDGEMIND_BUILD_CLI)
-
-    add_executable(
-        syj-edgemind
+    add_executable(syj-edgemind
         src/cli/main.cpp
     )
-
-    target_compile_features(
-        syj-edgemind
-        PRIVATE
-            cxx_std_17
-    )
-
-    target_link_libraries(
-        syj-edgemind
+    target_link_libraries(syj-edgemind
         PRIVATE
             syj-edgemind-core
             syj_edgemind_warnings
     )
-
 endif()
 
-# ============================================================================
+# ---------------------------------------------------------------------------
 # Tests
-# ============================================================================
-
+# ---------------------------------------------------------------------------
 if(SYJ_EDGEMIND_BUILD_TESTS)
-
     enable_testing()
-
     add_subdirectory(tests)
-
 endif()
 
-# ============================================================================
-# Build summary
-# ============================================================================
-
-message(STATUS "")
-message(STATUS "============================================================")
-message(STATUS "SYJ EdgeMind")
-message(STATUS "============================================================")
-message(STATUS "Version:              ${PROJECT_VERSION}")
-message(STATUS "Phase:                1 — Native llama.cpp Runtime")
-message(STATUS "llama.cpp tag:        ${SYJ_EDGEMIND_LLAMA_CPP_TAG}")
-message(STATUS "Build type:           ${CMAKE_BUILD_TYPE}")
-message(STATUS "CLI:                  ${SYJ_EDGEMIND_BUILD_CLI}")
-message(STATUS "Tests:                ${SYJ_EDGEMIND_BUILD_TESTS}")
-message(STATUS "System llama.cpp:     ${SYJ_EDGEMIND_USE_SYSTEM_LLAMA}")
-message(STATUS "Strict warnings:      ${SYJ_EDGEMIND_ENABLE_WARNINGS}")
-message(STATUS "")
-message(STATUS "Memory-budget enforcement: Phase 2")
-message(STATUS "Model registry:            Phase 3")
-message(STATUS "Windows packaging:         Phase 5")
-message(STATUS "iOS bridge:                Phase 6/7")
-message(STATUS "============================================================")
-message(STATUS "")
+message(STATUS "SYJ EdgeMind: Phase 2 configured (llama.cpp tag ${SYJ_EDGEMIND_LLAMA_CPP_TAG})")

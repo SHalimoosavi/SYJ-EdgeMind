@@ -41,6 +41,23 @@ std::string validate_config(const RuntimeConfig& config) {
         return "max_tokens must be a positive integer.";
     }
 
+    if (config.memory_budget_mb < RuntimeConfig::SYJ_EDGEMIND_MIN_MEMORY_BUDGET_MB ||
+        config.memory_budget_mb > RuntimeConfig::SYJ_EDGEMIND_MAX_MEMORY_BUDGET_MB) {
+        std::ostringstream oss;
+        oss << "memory_budget_mb " << config.memory_budget_mb << " is out of the supported range ["
+            << RuntimeConfig::SYJ_EDGEMIND_MIN_MEMORY_BUDGET_MB << ", "
+            << RuntimeConfig::SYJ_EDGEMIND_MAX_MEMORY_BUDGET_MB << "].";
+        return oss.str();
+    }
+
+    if (config.safety_reserve_mb < 0) {
+        return "safety_reserve_mb must be non-negative.";
+    }
+
+    if (config.safety_reserve_mb >= config.memory_budget_mb) {
+        return "safety_reserve_mb must be less than memory_budget_mb (nothing would ever fit).";
+    }
+
     return std::string();
 }
 
