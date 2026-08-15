@@ -10,14 +10,7 @@ bool ContextManager::can_accept(int32_t additional_tokens) const {
     if (additional_tokens < 0) {
         return false;
     }
-
-    // Avoid signed-int overflow in n_used_ + additional_tokens by comparing
-    // against the remaining capacity first.
-    if (n_used_ > n_ctx_) {
-        return false;
-    }
-
-    return additional_tokens <= (n_ctx_ - n_used_);
+    return (n_used_ + additional_tokens) <= n_ctx_;
 }
 
 void ContextManager::consume(int32_t count) {

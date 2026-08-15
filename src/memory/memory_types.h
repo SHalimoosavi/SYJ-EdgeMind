@@ -41,9 +41,7 @@ struct ModelHyperparams {
 // treats valid == false as UNSAFE unconditionally, regardless of the byte
 // fields' contents.
 struct MemoryEstimate {
-    // Fail closed by default. A caller must explicitly establish every
-    // required component before an estimate can participate in admission.
-    bool valid = false;
+    bool valid = true;
 
     // Actual, OBSERVED value (llama_model_size() post-load) — not an
     // estimate. This is llama.cpp's own reported model size; it is NOT

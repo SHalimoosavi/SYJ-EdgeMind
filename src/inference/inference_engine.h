@@ -86,8 +86,6 @@ public:
     const std::string& memory_diagnostic() const { return memory_diagnostic_; }
 
 private:
-    void unload();
-
     llama_model* model_ = nullptr;
     llama_context* ctx_ = nullptr;
     std::unique_ptr<Tokenizer> tokenizer_;

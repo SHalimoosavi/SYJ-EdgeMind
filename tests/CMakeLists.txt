@@ -1,4 +1,4 @@
-# Phase 1 + Phase 2: minimal, meaningful tests only.
+# Phase 1 + Phase 2 + v0.3.0: minimal, meaningful tests only.
 # No test framework dependency is introduced — each test is a small
 # standalone executable that exits non-zero on failure, registered with
 # CTest. This keeps the "minimal dependencies" rule from Phase 0 intact.
@@ -6,6 +6,7 @@
 # tests/integration and tests/inference gain further content in later
 # phases (Phase 3 model-verification tests, Phase 9 hardening).
 # tests/memory holds Phase 2's memory-subsystem tests.
+# tests/usage holds v0.3.0's usage/quota-subsystem tests.
 
 add_executable(test_config unit/test_config.cpp)
 target_link_libraries(test_config PRIVATE syj-edgemind-core syj_edgemind_warnings)
@@ -30,3 +31,15 @@ add_test(NAME test_invalid_model_path COMMAND test_invalid_model_path)
 add_executable(test_memory_admission memory/test_memory_admission.cpp)
 target_link_libraries(test_memory_admission PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_memory_admission COMMAND test_memory_admission)
+
+add_executable(test_usage_accounting usage/test_usage_accounting.cpp)
+target_link_libraries(test_usage_accounting PRIVATE syj-edgemind-core syj_edgemind_warnings)
+add_test(NAME test_usage_accounting COMMAND test_usage_accounting)
+
+add_executable(test_usage_state_store usage/test_usage_state_store.cpp)
+target_link_libraries(test_usage_state_store PRIVATE syj-edgemind-core syj_edgemind_warnings)
+add_test(NAME test_usage_state_store COMMAND test_usage_state_store)
+
+add_executable(test_usage_manager usage/test_usage_manager.cpp)
+target_link_libraries(test_usage_manager PRIVATE syj-edgemind-core syj_edgemind_warnings)
+add_test(NAME test_usage_manager COMMAND test_usage_manager)

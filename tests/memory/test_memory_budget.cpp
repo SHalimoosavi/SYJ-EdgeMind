@@ -24,7 +24,6 @@ int main() {
     // Comfortably-under-budget configuration is accepted.
     {
         MemoryEstimate est;
-        est.valid = true;
         est.weights_bytes = mb(1800);
         est.weights_bytes_is_observed = true;
         est.kv_cache_bytes = mb(400);
@@ -41,7 +40,6 @@ int main() {
     // Over-budget configuration is rejected.
     {
         MemoryEstimate est;
-        est.valid = true;
         est.weights_bytes = mb(3800);
         est.weights_bytes_is_observed = true;
         est.kv_cache_bytes = mb(900);
@@ -62,7 +60,6 @@ int main() {
     // additional implicit margin at the comparison itself).
     {
         MemoryEstimate est;
-        est.valid = true;
         est.weights_bytes = mb(2700); // total will equal exactly 2700 MB
         const MemoryDecision d = MemoryBudgetPolicy::evaluate(est, mb(3000), mb(300)); // ceiling = 2700 MB
         check(d.safe, "estimate exactly equal to the usable ceiling is SAFE (inclusive boundary)");
@@ -71,7 +68,6 @@ int main() {
     // One byte over the boundary is rejected — no silent rounding leniency.
     {
         MemoryEstimate est;
-        est.valid = true;
         est.weights_bytes = mb(2700) + 1;
         const MemoryDecision d = MemoryBudgetPolicy::evaluate(est, mb(3000), mb(300));
         check(!d.safe, "one byte over the usable ceiling is rejected");
@@ -80,7 +76,6 @@ int main() {
     // Clearly over budget — sanity check on an unambiguous case.
     {
         MemoryEstimate est;
-        est.valid = true;
         est.weights_bytes = mb(10000);
         const MemoryDecision d = MemoryBudgetPolicy::evaluate(est, mb(3000), mb(300));
         check(!d.safe, "an estimate far exceeding the budget is rejected");
@@ -90,8 +85,7 @@ int main() {
     // not underflow, and must reject even a zero-byte estimate (0 <= 0
     // would otherwise silently read as "fits").
     {
-        MemoryEstimate est; // all zero, but explicitly valid
-        est.valid = true;
+        MemoryEstimate est; // all zero, valid == true
         const MemoryDecision d = MemoryBudgetPolicy::evaluate(est, mb(300), mb(300));
         check(!d.safe, "reserve == budget leaves zero usable ceiling: reject, even a zero estimate");
     }
@@ -100,7 +94,6 @@ int main() {
     // false-safe decision.
     {
         MemoryEstimate est;
-        est.valid = true;
         const MemoryDecision d = MemoryBudgetPolicy::evaluate(est, mb(100), mb(300));
         check(!d.safe, "reserve exceeding budget must not underflow into a false-safe decision");
     }

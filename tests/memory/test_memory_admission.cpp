@@ -51,7 +51,6 @@ MemoryEstimate build_estimate(const ModelHyperparams& hp, int32_t n_ctx, uint64_
     est.kv_cache_bytes = *kv;
     est.compute_buffer_bytes = *compute;
     est.runtime_overhead_bytes = mb(180);
-    est.valid = true;
     return est;
 }
 } // namespace

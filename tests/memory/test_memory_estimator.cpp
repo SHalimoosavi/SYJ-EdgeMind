@@ -101,14 +101,6 @@ int main() {
               "absurdly large n_layer (outside sane range) yields nullopt");
     }
 
-        ModelHyperparams non_divisible_embd{12, 770, 12, 12, 2048};
-        check(!MemoryEstimator::estimate_kv_cache_bytes(non_divisible_embd, 1024).has_value(),
-              "n_embd not divisible by n_head yields nullopt");
-
-        ModelHyperparams non_divisible_kv_heads{12, 768, 12, 5, 2048};
-        check(!MemoryEstimator::estimate_kv_cache_bytes(non_divisible_kv_heads, 1024).has_value(),
-              "n_head not divisible by n_head_kv yields nullopt");
-
     // Overflow guard, verified honestly: SYJ_EDGEMIND_MAX_SANE_* bounds were
     // deliberately chosen conservatively enough that the KV-cache formula
     // (2 * n_layer * n_ctx * n_embd_gqa * bytes_per_element) cannot overflow

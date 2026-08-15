@@ -2,9 +2,9 @@
 
 **Private, Offline AI for Low-Memory Devices.**
 
-> Status: Phase 1 — Native llama.cpp Runtime. CPU-only local inference is implemented and locally validated (see "Phase 1 build status" below); Windows/iOS packaging, the memory-budget engine, and the model registry are not implemented yet. See [ROADMAP.md](ROADMAP.md).
+> Status: v0.3.0 — Usage/Quota Manager (a parallel initiative alongside the phase-numbered roadmap — see [ROADMAP.md](ROADMAP.md)'s note). CPU-only local inference (v0.1.1, real-hardware validated by the maintainer), a memory-budget admission system (Phase 2), and a local usage/quota guard (v0.3.0) are implemented; see "Build status" below for exactly what's been verified where. Windows/iOS packaging and the model registry (Phase 3) are not implemented yet.
 
-SYJ EdgeMind is designed for private, offline local inference and does not require cloud API keys after model acquisition. Actual RAM consumption varies by model, context, runtime configuration, and platform — not every model will run on every 4 GB device, and no claim is made that it will until Phase 2's memory-budget engine and Phase 8's real hardware measurements exist. Formal memory-budget enforcement is not implemented yet; Phase 1 only prevents an obviously unbounded context (see [docs/memory-model.md](docs/memory-model.md)).
+SYJ EdgeMind is designed for private, offline local inference and does not require cloud API keys after model acquisition. Actual RAM consumption varies by model, context, runtime configuration, and platform — not every model will run on every 4 GB device. As of Phase 2, SYJ EdgeMind estimates memory usage and refuses configurations that exceed your configured budget (see [docs/memory-model.md](docs/memory-model.md)), but that estimate is not yet checked against live available system RAM, and formal, comprehensive real-hardware validation of the memory-budget path itself is still pending (see "Build status" below).
 
 ## Why it exists
 
@@ -78,7 +78,7 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-See [docs/development.md](docs/development.md) for what this actually does and [Phase 1 build status](#phase-1-build-status) below for what has and hasn't been locally verified.
+See [docs/development.md](docs/development.md) for what this actually does and [Build status](#build-status) below for what has and hasn't been locally verified.
 
 ## Usage
 
@@ -95,11 +95,13 @@ Interactive mode supports:
 ```
 /help    show interactive commands
 /info    show loaded model info (params, size, context, threads)
+/memory  show the memory-budget diagnostic from the last load
+/usage   show current usage, remaining quota, and reset time
 /reset   clear the context and start fresh
 /quit    exit
 ```
 
-`/memory` and `/context` (richer memory/context diagnostics) are planned for Phase 4 once Phase 2's memory-budget engine exists to report against.
+`/context` (richer context diagnostics) is planned for Phase 4.
 
 ## Model management
 
@@ -109,9 +111,19 @@ Not implemented yet — point `--model` at a local GGUF file you already have. T
 
 No benchmark numbers exist yet. None will be published until they are actually measured (Phase 8). See [docs/performance.md](docs/performance.md).
 
-## Phase 1 build status
+## Memory management
 
-SYJ EdgeMind's own source (config validation, context accounting) has been compiled and its unit tests run successfully in the development sandbox used to build this phase. The parts of the source that depend on llama.cpp (tokenizer, sampler, inference engine, C API, CLI) were verified for syntax/API-usage correctness against the real, current llama.cpp API (tag `b10375`) but could not be *linked and run* against the real llama.cpp library in that sandbox, because it has no network access to fetch llama.cpp's source — a `cmake -S . -B build` there fails at the `FetchContent` step, not because of an error in SYJ EdgeMind's code. On any machine with normal internet access, the build commands above fetch llama.cpp automatically. See [docs/development.md](docs/development.md) and [docs/troubleshooting.md](docs/troubleshooting.md) for details, and please report back if you hit a build issue on real hardware — Phase 1 has not yet been confirmed end-to-end against a real GGUF model.
+SYJ EdgeMind estimates model weight, KV-cache, and compute-buffer memory before committing to a context, and refuses to create one if the total would exceed your configured budget (default 3000 MB budget / 300 MB safety reserve — tune with `--memory-budget`/`--safety-reserve`). The estimation is fail-closed: if a model's hyperparameters can't be established safely (invalid, out of a sane range, or would overflow), the configuration is rejected outright rather than silently treated as zero-cost. See [docs/memory-model.md](docs/memory-model.md) for the full pipeline, what's an actual measurement vs. an estimate, the exact (inclusive) boundary rule, and current limitations (notably: live system-RAM availability isn't factored into the decision yet — only the configured budget is).
+
+## Usage/quota management (v0.3.0)
+
+An optional, entirely local and offline usage guard — not a licensing or subscription system, no cloud, no telemetry. Configure any combination of `--time-limit-minutes`, `--message-limit`, `--token-limit` (each defaults to unlimited); usage persists across restarts in a small versioned local file (`--usage-state-path`, default `.syj_edgemind_usage_state`) and resets on a configurable period (`--reset-period-hours`, default 24h). A corrupted state file fails closed — it is never treated as unlimited access, and is diagnostically distinct from a legitimately exhausted quota. See [docs/usage-model.md](docs/usage-model.md) for the full design, including exactly what counts as "usage" and current limitations.
+
+## Build status
+
+SYJ EdgeMind's own llama.cpp-independent source (config validation, context accounting, the Phase 2 memory estimator/budget-policy module, and the v0.3.0 usage/quota subsystem) has been compiled *and its unit/integration tests actually run* successfully in the development sandbox used to build these — 8/8 tests pass, including catching and fixing three real, distinct bugs during development (a budget-policy boundary-condition bug, a test that asserted a false overflow premise, and a usage-state "fresh save fails validation" bug — all detailed in [docs/development.md](docs/development.md)). The parts of the source that depend on llama.cpp (tokenizer, sampler, inference engine, memory observer, C API, CLI, and `Runtime`'s usage-manager integration) were verified for syntax/API-usage correctness against the real, current llama.cpp API (tag `b10375`) but could not be *linked and run* against the real llama.cpp library in that sandbox, because it has no network access to fetch llama.cpp's source — a `cmake -S . -B build` there fails at the `FetchContent` step, not because of an error in SYJ EdgeMind's code. On any machine with normal internet access, the build commands above fetch llama.cpp automatically.
+
+Separately, the project maintainer has confirmed real-hardware validation of the Phase 1 runtime (Android/Termux, `SmolLM2-135M-Instruct-Q4_K_M.gguf`, tag `v0.1.1`) — a genuine end-to-end build/test/inference pass. **Neither the Phase 2 memory-admission code nor the v0.3.0 usage/quota code has yet been confirmed on that or any other real hardware** — this includes not yet having run a normal load, `/memory`, `/usage`, a deliberately-unsafe memory configuration, or a deliberately-exhausted quota, against a real linked build. See [docs/development.md](docs/development.md) and [docs/troubleshooting.md](docs/troubleshooting.md) for details, and please report back once you've run it — that's the one thing no sandbox in this conversation has been able to do.
 
 ## Troubleshooting
 

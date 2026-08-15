@@ -35,8 +35,18 @@ bool file_exists(const std::string& path) {
 InferenceEngine::InferenceEngine() = default;
 
 InferenceEngine::~InferenceEngine() {
-    unload();
+    // Reverse of the acquisition order documented in inference_engine.h.
+    tokenizer_.reset();
+    context_manager_.reset();
 
+    if (ctx_ != nullptr) {
+        llama_free(ctx_);
+        ctx_ = nullptr;
+    }
+    if (model_ != nullptr) {
+        llama_model_free(model_);
+        model_ = nullptr;
+    }
     // NOTE: assumes a single InferenceEngine is used at a time within the
     // process (true for the Phase 1 CLI). A multi-instance runtime would
     // need a process-wide refcount around llama_backend_init/free instead
@@ -47,31 +57,7 @@ InferenceEngine::~InferenceEngine() {
     }
 }
 
-void InferenceEngine::unload() {
-    // Reverse of the acquisition order documented in inference_engine.h.
-    tokenizer_.reset();
-    context_manager_.reset();
-
-    if (ctx_ != nullptr) {
-        llama_free(ctx_);
-        ctx_ = nullptr;
-    }
-
-    if (model_ != nullptr) {
-        llama_model_free(model_);
-        model_ = nullptr;
-    }
-
-    config_ = RuntimeConfig{};
-}
-
 EngineError InferenceEngine::load(const RuntimeConfig& config) {
-    // Every load attempt starts from a clean model/context state. The
-    // backend itself remains initialized so repeated loads do not repeatedly
-    // initialize/free llama.cpp's process-wide backend.
-    unload();
-    memory_diagnostic_.clear();
-
     if (!file_exists(config.model_path)) {
         return EngineError::ModelFileNotFound;
     }
@@ -124,9 +110,6 @@ EngineError InferenceEngine::load(const RuntimeConfig& config) {
         estimate.compute_buffer_bytes = 0;
         estimate.runtime_overhead_bytes = 0;
     } else {
-        // Both derived components were established successfully, so the
-        // estimate is now explicitly trusted by the fail-closed policy.
-        estimate.valid = true;
         estimate.kv_cache_bytes = *kv_cache;
         estimate.compute_buffer_bytes = *compute_buffer;
         // Fixed, documented runtime-overhead default (process/runtime

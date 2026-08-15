@@ -42,6 +42,21 @@ RuntimeConfig to_cpp_config(const syj_edgemind_config* c) {
     if (c->safety_reserve_mb > 0) {
         config.safety_reserve_mb = c->safety_reserve_mb;
     }
+    if (c->session_time_limit_seconds > 0) {
+        config.session_time_limit_seconds = c->session_time_limit_seconds;
+    }
+    if (c->daily_message_limit > 0) {
+        config.daily_message_limit = c->daily_message_limit;
+    }
+    if (c->daily_token_limit > 0) {
+        config.daily_token_limit = c->daily_token_limit;
+    }
+    if (c->reset_period_seconds > 0) {
+        config.reset_period_seconds = c->reset_period_seconds;
+    }
+    if (c->usage_state_path != nullptr) {
+        config.usage_state_path = c->usage_state_path;
+    }
     return config;
 }
 
@@ -62,6 +77,7 @@ syj_edgemind_status to_c_status(RuntimeError err) {
         case RuntimeError::DecodeFailed:         return SYJ_EDGEMIND_ERROR_DECODE_FAILED;
         case RuntimeError::MemoryBudgetExceeded: return SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED;
         case RuntimeError::NotLoaded:            return SYJ_EDGEMIND_ERROR_NOT_LOADED;
+        case RuntimeError::QuotaExceeded:        return SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED;
     }
     return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED; // unreachable if RuntimeError is exhaustive above
 }
@@ -82,6 +98,11 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config) {
     out_config->max_tokens = defaults.max_tokens;
     out_config->memory_budget_mb = defaults.memory_budget_mb;
     out_config->safety_reserve_mb = defaults.safety_reserve_mb;
+    out_config->session_time_limit_seconds = defaults.session_time_limit_seconds;
+    out_config->daily_message_limit = defaults.daily_message_limit;
+    out_config->daily_token_limit = defaults.daily_token_limit;
+    out_config->reset_period_seconds = defaults.reset_period_seconds;
+    out_config->usage_state_path = nullptr; // caller sees "use default"; to_cpp_config() applies RuntimeConfig's actual default path
 }
 
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
@@ -95,7 +116,7 @@ syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
     if (status == SYJ_EDGEMIND_OK) {
         return handle;
     }
-    if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED) {
+    if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED || status == SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED) {
         // Kept alive on purpose — see header comment on syj_edgemind_create.
         return handle;
     }
@@ -111,6 +132,22 @@ size_t syj_edgemind_get_memory_report(const syj_edgemind_runtime* runtime, char*
         return 0;
     }
     const std::string report = runtime->runtime.memory_report();
+    if (buf_size > 0 && out_buf != nullptr) {
+        const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
+        std::memcpy(out_buf, report.data(), to_copy);
+        out_buf[to_copy] = '\0';
+    }
+    return report.size();
+}
+
+size_t syj_edgemind_get_usage_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size) {
+    if (runtime == nullptr) {
+        if (buf_size > 0 && out_buf != nullptr) {
+            out_buf[0] = '\0';
+        }
+        return 0;
+    }
+    const std::string report = runtime->runtime.usage_report();
     if (buf_size > 0 && out_buf != nullptr) {
         const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
         std::memcpy(out_buf, report.data(), to_copy);
@@ -174,6 +211,7 @@ const char* syj_edgemind_status_message(syj_edgemind_status status) {
         case SYJ_EDGEMIND_ERROR_DECODE_FAILED:         return "Inference failed.";
         case SYJ_EDGEMIND_ERROR_NOT_LOADED:            return "Runtime is not loaded.";
         case SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED: return "Configuration exceeds the configured memory budget.";
+        case SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED:        return "Usage/quota limit reached.";
     }
     return "Unknown status.";
 }

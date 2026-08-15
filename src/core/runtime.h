@@ -6,6 +6,7 @@
 
 #include "core/config.h"
 #include "inference/inference_engine.h"
+#include "usage/usage_manager.h"
 
 namespace syj::edgemind {
 
@@ -14,8 +15,10 @@ namespace syj::edgemind {
 // syj_edgemind_status, instead of pattern-matching substrings out of a
 // human-readable message string. RuntimeError is a superset of EngineError
 // (adds InvalidConfig, for failures caught by validate_config() before the
-// engine is ever touched, and NotLoaded, for operations attempted on a
-// Runtime that never successfully loaded).
+// engine is ever touched; NotLoaded, for operations attempted on a Runtime
+// that never successfully loaded; and QuotaExceeded, for the v0.3.0 usage/
+// quota admission gate — evaluated BEFORE memory admission/model loading,
+// per the documented pipeline in docs/architecture.md).
 enum class RuntimeError {
     None,
     InvalidConfig,
@@ -26,6 +29,7 @@ enum class RuntimeError {
     DecodeFailed,
     MemoryBudgetExceeded,
     NotLoaded,
+    QuotaExceeded,
 };
 
 // The top-level object platform code (CLI today; Windows/iOS wrappers in
@@ -39,17 +43,25 @@ public:
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    // Validates `config`, then loads the model. On failure, returns a
-    // human-readable error and the Runtime remains unloaded (is_ready()
-    // returns false) — it never leaves a half-initialized runtime in place.
+    // Validates `config`, checks usage/quota admission (see UsageManager),
+    // then loads the model. On any failure, returns a human-readable error
+    // and the Runtime remains unloaded (is_ready() returns false) — it
+    // never leaves a half-initialized runtime in place. Order of checks:
+    // config validation -> quota admission -> memory admission (inside
+    // InferenceEngine::load()) -> model loading. A denied quota check never
+    // reaches memory admission or touches the model at all.
     // See last_error() for a machine-readable classification of the same
     // outcome.
     std::string load(const RuntimeConfig& config);
 
     bool is_ready() const;
 
-    // Streams a response to `prompt`. Returns a human-readable error string
-    // (empty on success). See InferenceEngine::generate for callback semantics.
+    // Re-checks quota admission, then streams a response to `prompt` if
+    // allowed, then records the actual usage (one message + however many
+    // tokens were actually generated) — accounting happens AFTER
+    // generation, reflecting what actually occurred, not what was
+    // requested. Returns a human-readable error string (empty on success).
+    // See InferenceEngine::generate for callback semantics.
     std::string generate(const std::string& prompt, const TokenStreamCallback& on_token);
 
     void reset_context();
@@ -63,6 +75,13 @@ public:
     // state Phase 2 requires callers to be able to inspect.
     std::string memory_report() const;
 
+    // v0.3.0: the usage/quota diagnostic — current usage, remaining quota,
+    // and reset time, formatted for a CLI /usage command. Safe to call
+    // whether or not the Runtime is currently loaded (it reads the local
+    // usage-state file, which is independent of model state); if load()
+    // was never called, this reports against config()'s default policy.
+    std::string usage_report() const;
+
     // Machine-readable classification of the outcome of the most recent
     // load() or generate() call — the explicit, non-string-matching
     // source of truth the C API status mapping is built from.
@@ -70,6 +89,7 @@ public:
 
 private:
     std::unique_ptr<InferenceEngine> engine_;
+    std::unique_ptr<UsageManager> usage_manager_;
     RuntimeConfig config_;
     bool ready_ = false;
     RuntimeError last_error_ = RuntimeError::None;

@@ -58,6 +58,25 @@ std::string validate_config(const RuntimeConfig& config) {
         return "safety_reserve_mb must be less than memory_budget_mb (nothing would ever fit).";
     }
 
+    if (config.session_time_limit_seconds < 0 || config.session_time_limit_seconds > RuntimeConfig::SYJ_EDGEMIND_MAX_SANE_LIMIT) {
+        return "session_time_limit_seconds must be non-negative and within the supported sane range (0 disables it).";
+    }
+    if (config.daily_message_limit < 0 || config.daily_message_limit > RuntimeConfig::SYJ_EDGEMIND_MAX_SANE_LIMIT) {
+        return "daily_message_limit must be non-negative and within the supported sane range (0 disables it).";
+    }
+    if (config.daily_token_limit < 0 || config.daily_token_limit > RuntimeConfig::SYJ_EDGEMIND_MAX_SANE_LIMIT) {
+        return "daily_token_limit must be non-negative and within the supported sane range (0 disables it).";
+    }
+    if (config.reset_period_seconds < RuntimeConfig::SYJ_EDGEMIND_MIN_RESET_PERIOD_SECONDS) {
+        std::ostringstream oss;
+        oss << "reset_period_seconds must be at least " << RuntimeConfig::SYJ_EDGEMIND_MIN_RESET_PERIOD_SECONDS
+            << " seconds (a shorter reset window is not meaningful).";
+        return oss.str();
+    }
+    if (config.usage_state_path.empty()) {
+        return "usage_state_path must not be empty.";
+    }
+
     return std::string();
 }
 

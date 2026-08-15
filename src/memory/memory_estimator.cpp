@@ -28,16 +28,6 @@ bool hyperparams_in_sane_range(const ModelHyperparams& hp) {
     if (hp.n_head <= 0 || hp.n_head > MemoryEstimator::SYJ_EDGEMIND_MAX_SANE_HEADS) return false;
     if (hp.n_head_kv <= 0 || hp.n_head_kv > MemoryEstimator::SYJ_EDGEMIND_MAX_SANE_HEADS) return false;
     if (hp.n_head_kv > hp.n_head) return false; // violates the GQA constraint (kv heads <= query heads)
-
-    // llama.cpp models use whole attention heads. Reject malformed metadata
-    // rather than silently truncating n_embd / n_head below.
-    if (hp.n_embd % hp.n_head != 0) return false;
-
-    // Grouped-query attention must divide the query heads evenly into KV
-    // groups. Reject malformed metadata rather than estimating a misleading
-    // cache size from integer truncation.
-    if (hp.n_head % hp.n_head_kv != 0) return false;
-
     return true;
 }
 

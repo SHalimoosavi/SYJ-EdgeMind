@@ -135,6 +135,53 @@ int main() {
         check(validate_config(cfg).empty(), "a sane, valid memory-budget configuration should pass");
     }
 
+    // v0.3.0 usage-limit validation.
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.session_time_limit_seconds = -1;
+        check(!validate_config(cfg).empty(), "negative session_time_limit_seconds should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.daily_message_limit = -1;
+        check(!validate_config(cfg).empty(), "negative daily_message_limit should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.daily_token_limit = -1;
+        check(!validate_config(cfg).empty(), "negative daily_token_limit should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.reset_period_seconds = 10; // below the 60s minimum
+        check(!validate_config(cfg).empty(), "reset_period_seconds below the minimum should be rejected");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.usage_state_path = "";
+        check(!validate_config(cfg).empty(), "empty usage_state_path should be rejected");
+    }
+    {
+        // 0 (disabled) for every usage limit is the default and must be valid.
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        check(validate_config(cfg).empty(), "default (all usage limits disabled) configuration should pass");
+    }
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.session_time_limit_seconds = 3600;
+        cfg.daily_message_limit = 50;
+        cfg.daily_token_limit = 10000;
+        cfg.reset_period_seconds = 3600;
+        check(validate_config(cfg).empty(), "a sane, fully-configured usage-limit configuration should pass");
+    }
+
     if (g_failures > 0) {
         std::fprintf(stderr, "%d check(s) failed.\n", g_failures);
         return EXIT_FAILURE;

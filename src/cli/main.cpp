@@ -32,12 +32,19 @@ void print_usage(const char* argv0) {
         "  --memory-budget <mb>   Memory budget in MB (default: 3000)\n"
         "  --safety-reserve <mb>  Memory safety reserve in MB, held back from the\n"
         "                         budget and never allocated toward (default: 300)\n"
+        "  --time-limit-minutes <n>  Session time limit in minutes (default: unlimited)\n"
+        "  --message-limit <n>       Messages allowed per reset period (default: unlimited)\n"
+        "  --token-limit <n>         Generated tokens allowed per reset period (default: unlimited)\n"
+        "  --reset-period-hours <n>  How often message/token limits reset (default: 24)\n"
+        "  --usage-state-path <p>    Local file for persisted usage state\n"
+        "                            (default: .syj_edgemind_usage_state)\n"
         "  -h, --help             Show this help and exit\n\n"
         "If a prompt is given as a trailing argument, SYJ EdgeMind generates a\n"
         "single response and exits. Otherwise it starts interactive mode:\n"
         "  /help    show interactive commands\n"
         "  /info    show loaded model info\n"
         "  /memory  show the memory-budget diagnostic from the last load\n"
+        "  /usage   show current usage, remaining quota, and reset time\n"
         "  /reset   clear the context and start fresh\n"
         "  /quit    exit\n",
         argv0);
@@ -105,6 +112,17 @@ void print_memory_report(const syj_edgemind_runtime* rt) {
     }
     std::string buf(needed + 1, '\0');
     syj_edgemind_get_memory_report(rt, buf.data(), buf.size());
+    std::printf("%s\n", buf.c_str());
+}
+
+void print_usage_report(const syj_edgemind_runtime* rt) {
+    const size_t needed = syj_edgemind_get_usage_report(rt, nullptr, 0);
+    if (needed == 0) {
+        std::printf("No usage report available.\n");
+        return;
+    }
+    std::string buf(needed + 1, '\0');
+    syj_edgemind_get_usage_report(rt, buf.data(), buf.size());
     std::printf("%s\n", buf.c_str());
 }
 
@@ -179,6 +197,32 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "ERROR: --safety-reserve expects an integer (MB).\n");
                 return 2;
             }
+        } else if (arg == "--time-limit-minutes") {
+            int64_t minutes = 0;
+            if (!parse_int64_arg(next("--time-limit-minutes"), &minutes)) {
+                std::fprintf(stderr, "ERROR: --time-limit-minutes expects an integer.\n");
+                return 2;
+            }
+            config.session_time_limit_seconds = minutes * 60;
+        } else if (arg == "--message-limit") {
+            if (!parse_int64_arg(next("--message-limit"), &config.daily_message_limit)) {
+                std::fprintf(stderr, "ERROR: --message-limit expects an integer.\n");
+                return 2;
+            }
+        } else if (arg == "--token-limit") {
+            if (!parse_int64_arg(next("--token-limit"), &config.daily_token_limit)) {
+                std::fprintf(stderr, "ERROR: --token-limit expects an integer.\n");
+                return 2;
+            }
+        } else if (arg == "--reset-period-hours") {
+            int64_t hours = 0;
+            if (!parse_int64_arg(next("--reset-period-hours"), &hours)) {
+                std::fprintf(stderr, "ERROR: --reset-period-hours expects an integer.\n");
+                return 2;
+            }
+            config.reset_period_seconds = hours * 3600;
+        } else if (arg == "--usage-state-path") {
+            config.usage_state_path = next("--usage-state-path");
         } else if (!arg.empty() && arg[0] != '-') {
             trailing_prompt = arg;
             have_trailing_prompt = true;
@@ -196,10 +240,26 @@ int main(int argc, char** argv) {
     }
     config.model_path = model_path.c_str();
 
-    std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d   Memory budget: %lld MB (reserve %lld MB)\n\n",
+    std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d   Memory budget: %lld MB (reserve %lld MB)\n",
                 config.context_size, config.threads,
                 static_cast<long long>(config.memory_budget_mb),
                 static_cast<long long>(config.safety_reserve_mb));
+    if (config.session_time_limit_seconds > 0 || config.daily_message_limit > 0 || config.daily_token_limit > 0) {
+        std::printf("Usage limits: ");
+        if (config.session_time_limit_seconds > 0) {
+            std::printf("session=%llds ", static_cast<long long>(config.session_time_limit_seconds));
+        }
+        if (config.daily_message_limit > 0) {
+            std::printf("messages=%lld/%llds ", static_cast<long long>(config.daily_message_limit),
+                        static_cast<long long>(config.reset_period_seconds));
+        }
+        if (config.daily_token_limit > 0) {
+            std::printf("tokens=%lld/%llds ", static_cast<long long>(config.daily_token_limit),
+                        static_cast<long long>(config.reset_period_seconds));
+        }
+        std::printf("\n");
+    }
+    std::printf("\n");
     std::printf("Loading model: %s ...\n", model_path.c_str());
 
     syj_edgemind_status status = SYJ_EDGEMIND_OK;
@@ -208,6 +268,13 @@ int main(int argc, char** argv) {
     if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED) {
         std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(status));
         print_memory_report(rt);
+        syj_edgemind_destroy(rt); // kept alive by create() specifically to allow this
+        return 1;
+    }
+
+    if (status == SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED) {
+        std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(status));
+        print_usage_report(rt);
         syj_edgemind_destroy(rt); // kept alive by create() specifically to allow this
         return 1;
     }
@@ -226,6 +293,12 @@ int main(int argc, char** argv) {
         const syj_edgemind_status gen_status =
             syj_edgemind_generate(rt, trailing_prompt.c_str(), stream_to_stdout, nullptr);
         std::printf("\n");
+        if (gen_status == SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED) {
+            std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(gen_status));
+            print_usage_report(rt);
+            syj_edgemind_destroy(rt);
+            return 1;
+        }
         if (gen_status != SYJ_EDGEMIND_OK) {
             std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(gen_status));
             syj_edgemind_destroy(rt);
@@ -246,13 +319,16 @@ int main(int argc, char** argv) {
         if (line == "/quit") {
             break;
         } else if (line == "/help") {
-            std::printf("Commands: /help  /info  /memory  /reset  /quit\n");
+            std::printf("Commands: /help  /info  /memory  /usage  /reset  /quit\n");
             continue;
         } else if (line == "/info") {
             print_model_info(rt);
             continue;
         } else if (line == "/memory") {
             print_memory_report(rt);
+            continue;
+        } else if (line == "/usage") {
+            print_usage_report(rt);
             continue;
         } else if (line == "/reset") {
             syj_edgemind_reset(rt);
@@ -265,6 +341,15 @@ int main(int argc, char** argv) {
         std::printf("\nSYJ EdgeMind:\n");
         const syj_edgemind_status gen_status = syj_edgemind_generate(rt, line.c_str(), stream_to_stdout, nullptr);
         std::printf("\n\n");
+        if (gen_status == SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED) {
+            std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(gen_status));
+            print_usage_report(rt);
+            // Deliberately continue, not break: a quota denial means "not
+            // right now", not "this runtime is broken" — /usage, /info,
+            // /memory, /reset all remain usable, unlike a genuine
+            // EngineError below.
+            continue;
+        }
         if (gen_status != SYJ_EDGEMIND_OK) {
             std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(gen_status));
             // Per Phase 1 spec §14: do not continue with an invalid runtime.

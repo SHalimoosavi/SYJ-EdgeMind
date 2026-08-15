@@ -93,6 +93,9 @@ add_library(syj-edgemind-core STATIC
     src/memory/memory_estimator.cpp
     src/memory/memory_budget.cpp
     src/memory/memory_observer.cpp
+    src/usage/usage_accounting.cpp
+    src/usage/usage_state_store.cpp
+    src/usage/usage_manager.cpp
     src/inference/inference_engine.cpp
     src/inference/sampler.cpp
     src/api/edge_mind_api.cpp
