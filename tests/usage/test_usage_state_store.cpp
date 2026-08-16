@@ -9,7 +9,7 @@
 #include <string>
 
 #include "usage/usage_state_store.h"
-#include "test_temp_dir.h"
+#include "../test_temp_dir.h"
 
 using syj::edgemind::UsageState;
 using syj::edgemind::UsageStateLoadResult;
@@ -26,8 +26,7 @@ void check(bool condition, const char* description) {
 }
 
 std::string temp_path(const char* suffix) {
-    return syj::edgemind::test::writable_temp_dir() +
-           "/syj_edgemind_test_usage_state_" + suffix + ".txt";
+    return syj::edgemind::test::writable_temp_dir() + "/syj_edgemind_test_usage_state_" + suffix + ".txt";
 }
 
 void remove_if_exists(const std::string& path) {

@@ -77,6 +77,18 @@ std::string validate_config(const RuntimeConfig& config) {
         return "usage_state_path must not be empty.";
     }
 
+    if (config.model_registry_path.empty()) {
+        return "model_registry_path must not be empty.";
+    }
+    // expected_model_checksum_sha256 is intentionally NOT format-validated
+    // here (e.g. requiring exactly 64 hex characters) — an empty string is
+    // the common, valid "no checksum configured" case, and a malformed
+    // non-empty value simply fails to match during verification
+    // (VerificationStatus::ChecksumMismatch), which is itself a safe,
+    // fail-closed outcome. Rejecting it at config-validation time would add
+    // a second place that has to agree with ModelVerifier's comparison
+    // logic for no real safety benefit.
+
     return std::string();
 }
 

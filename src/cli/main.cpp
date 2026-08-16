@@ -38,11 +38,18 @@ void print_usage(const char* argv0) {
         "  --reset-period-hours <n>  How often message/token limits reset (default: 24)\n"
         "  --usage-state-path <p>    Local file for persisted usage state\n"
         "                            (default: .syj_edgemind_usage_state)\n"
+        "  --checksum <sha256>       Expected SHA-256 of the model file (optional;\n"
+        "                            GGUF structural verification always runs\n"
+        "                            regardless of whether this is set)\n"
+        "  --registry-path <p>       Local file for the model registry\n"
+        "                            (default: .syj_edgemind_model_registry)\n"
         "  -h, --help             Show this help and exit\n\n"
         "If a prompt is given as a trailing argument, SYJ EdgeMind generates a\n"
         "single response and exits. Otherwise it starts interactive mode:\n"
         "  /help    show interactive commands\n"
-        "  /info    show loaded model info\n"
+        "  /info    show loaded model info (from llama.cpp, after loading)\n"
+        "  /verify  show the model-verification report (from SYJ EdgeMind's own\n"
+        "           GGUF reader, independent of llama.cpp)\n"
         "  /memory  show the memory-budget diagnostic from the last load\n"
         "  /usage   show current usage, remaining quota, and reset time\n"
         "  /reset   clear the context and start fresh\n"
@@ -123,6 +130,17 @@ void print_usage_report(const syj_edgemind_runtime* rt) {
     }
     std::string buf(needed + 1, '\0');
     syj_edgemind_get_usage_report(rt, buf.data(), buf.size());
+    std::printf("%s\n", buf.c_str());
+}
+
+void print_verification_report(const syj_edgemind_runtime* rt) {
+    const size_t needed = syj_edgemind_get_verification_report(rt, nullptr, 0);
+    if (needed == 0) {
+        std::printf("No verification report available.\n");
+        return;
+    }
+    std::string buf(needed + 1, '\0');
+    syj_edgemind_get_verification_report(rt, buf.data(), buf.size());
     std::printf("%s\n", buf.c_str());
 }
 
@@ -223,6 +241,10 @@ int main(int argc, char** argv) {
             config.reset_period_seconds = hours * 3600;
         } else if (arg == "--usage-state-path") {
             config.usage_state_path = next("--usage-state-path");
+        } else if (arg == "--checksum") {
+            config.expected_model_checksum_sha256 = next("--checksum");
+        } else if (arg == "--registry-path") {
+            config.model_registry_path = next("--registry-path");
         } else if (!arg.empty() && arg[0] != '-') {
             trailing_prompt = arg;
             have_trailing_prompt = true;
@@ -260,10 +282,17 @@ int main(int argc, char** argv) {
         std::printf("\n");
     }
     std::printf("\n");
-    std::printf("Loading model: %s ...\n", model_path.c_str());
+    std::printf("Verifying and loading model: %s ...\n", model_path.c_str());
 
     syj_edgemind_status status = SYJ_EDGEMIND_OK;
     syj_edgemind_runtime* rt = syj_edgemind_create(&config, &status);
+
+    if (status == SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED) {
+        std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(status));
+        print_verification_report(rt);
+        syj_edgemind_destroy(rt); // kept alive by create() specifically to allow this
+        return 1;
+    }
 
     if (status == SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED) {
         std::fprintf(stderr, "ERROR: %s\n\n", syj_edgemind_status_message(status));
@@ -319,10 +348,13 @@ int main(int argc, char** argv) {
         if (line == "/quit") {
             break;
         } else if (line == "/help") {
-            std::printf("Commands: /help  /info  /memory  /usage  /reset  /quit\n");
+            std::printf("Commands: /help  /info  /verify  /memory  /usage  /reset  /quit\n");
             continue;
         } else if (line == "/info") {
             print_model_info(rt);
+            continue;
+        } else if (line == "/verify") {
+            print_verification_report(rt);
             continue;
         } else if (line == "/memory") {
             print_memory_report(rt);

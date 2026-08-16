@@ -31,6 +31,12 @@ typedef enum syj_edgemind_status {
     SYJ_EDGEMIND_ERROR_NOT_LOADED = 7,
     SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED = 8,
     SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED = 9,
+    // Phase 3: the model file failed verification (missing, not a regular
+    // file, empty, invalid GGUF magic/version/metadata, or checksum
+    // mismatch — see syj_edgemind_get_verification_report() for which).
+    // Evaluated before memory admission and before the model is ever
+    // handed to llama.cpp.
+    SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED = 10,
 } syj_edgemind_status;
 
 typedef struct syj_edgemind_config {
@@ -52,6 +58,12 @@ typedef struct syj_edgemind_config {
     int64_t daily_token_limit;
     int64_t reset_period_seconds; // 0 means "use SYJ EdgeMind's default" (86400)
     const char* usage_state_path; // NULL means "use SYJ EdgeMind's default"
+
+    // Phase 3: model verification. NULL/empty means "no checksum
+    // configured" — GGUF structural verification is still mandatory
+    // either way (see syj_edgemind_create's verification behavior).
+    const char* expected_model_checksum_sha256;
+    const char* model_registry_path; // NULL means "use SYJ EdgeMind's default"
 } syj_edgemind_config;
 
 // Fills `out_config` with SYJ EdgeMind's built-in Phase 1 defaults
@@ -63,15 +75,16 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config);
 // Creates and loads a runtime. Returns NULL on failure; if out_status is
 // non-NULL, it is set to the specific failure reason.
 //
-// SPECIAL CASE: if the failure is SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED
-// or SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED, the returned pointer is NOT NULL —
-// the runtime handle is kept alive specifically so the caller can retrieve
-// the detailed diagnostic (syj_edgemind_get_memory_report() or
-// syj_edgemind_get_usage_report() respectively) before calling
-// syj_edgemind_destroy(). is_ready()-equivalent operations (generate, model
-// info) will still fail with SYJ_EDGEMIND_ERROR_NOT_LOADED on this handle;
-// it exists only to carry the diagnostic out. Every other failure reason
-// returns NULL as usual.
+// SPECIAL CASE: if the failure is SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED,
+// SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED, or
+// SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED, the returned pointer is NOT
+// NULL — the runtime handle is kept alive specifically so the caller can
+// retrieve the detailed diagnostic (syj_edgemind_get_memory_report(),
+// syj_edgemind_get_usage_report(), or syj_edgemind_get_verification_report()
+// respectively) before calling syj_edgemind_destroy(). is_ready()-equivalent
+// operations (generate, model info) will still fail with
+// SYJ_EDGEMIND_ERROR_NOT_LOADED on this handle; it exists only to carry the
+// diagnostic out. Every other failure reason returns NULL as usual.
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
                                            syj_edgemind_status* out_status);
 
@@ -119,6 +132,15 @@ size_t syj_edgemind_get_memory_report(const syj_edgemind_runtime* runtime, char*
 // syj_edgemind_get_memory_report(). Safe to call even on a handle returned
 // due to SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED (see syj_edgemind_create).
 size_t syj_edgemind_get_usage_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size);
+
+// Writes the Phase 3 model-verification diagnostic (STATUS: VERIFIED/
+// REJECTED, plus architecture/quantization/identity when available — see
+// ModelVerifier::verify's diagnostic format) from the most recent load
+// attempt into `out_buf`, with the same truncation/NUL-termination/
+// snprintf-like-return-value contract as syj_edgemind_get_memory_report().
+// Safe to call on a handle returned due to
+// SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED (see syj_edgemind_create).
+size_t syj_edgemind_get_verification_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size);
 
 // Human-readable string for a status code. Owned by SYJ EdgeMind; do not free.
 const char* syj_edgemind_status_message(syj_edgemind_status status);

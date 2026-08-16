@@ -29,7 +29,7 @@ There is exactly one inference core. Platform layers (`platform/windows`, `platf
 - `src/core/` — runtime lifecycle and configuration (`runtime.h/.cpp`, `config.h/.cpp`). `runtime.h` defines `RuntimeError`, an explicit, exhaustive error classification that `Runtime::last_error()` exposes — this is what the C API maps to `syj_edgemind_status`, not string inspection.
 - `src/memory/` — memory budget + estimator (Phase 2 — **implemented**: `memory_types.h`, `memory_estimator.*`, `memory_budget.*` are pure/llama.cpp-independent; `memory_observer.*` bridges real `llama_model_*` getters and `/proc/meminfo` into those pure types)
 - `src/usage/` — usage/quota manager (v0.3.0, parallel initiative — **implemented**: `usage_types.h`, `usage_accounting.*` are pure/no-I/O; `usage_state_store.*` is the sole file touching the filesystem; `usage_manager.*` coordinates them and owns the injectable clock. See `docs/usage-model.md`.)
-- `src/model/` — model registry + manager, SHA-256 verification (Phase 3)
+- `src/model/` — model registry + verification, self-contained SHA-256 (Phase 3 — **implemented**: `model_types.h`, `gguf_reader.*`, and `model_hash.*` are pure/llama.cpp-independent (`gguf_reader.*` parses the GGUF header+metadata directly against the public spec, never via llama.cpp); `model_verifier.*` composes filesystem checks with those; `model_registry.*` is the sole file persisting import history. See `docs/model-registry.md`.)
 - `src/inference/` — llama.cpp integration, sampler (Phase 1)
 - `src/context/` — context/token accounting and truncation strategy (Phase 1/2)
 - `src/tokenizer/` — tokenizer wrapper (Phase 1)

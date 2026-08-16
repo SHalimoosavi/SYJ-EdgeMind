@@ -8,7 +8,7 @@
 #include <string>
 
 #include "usage/usage_manager.h"
-#include "test_temp_dir.h"
+#include "../test_temp_dir.h"
 
 using syj::edgemind::UsageManager;
 using syj::edgemind::UsageOutcome;
@@ -25,8 +25,7 @@ void check(bool condition, const char* description) {
 }
 
 std::string temp_path(const char* suffix) {
-    return syj::edgemind::test::writable_temp_dir() +
-           "/syj_edgemind_test_usage_manager_" + suffix + ".txt";
+    return syj::edgemind::test::writable_temp_dir() + "/syj_edgemind_test_usage_manager_" + suffix + ".txt";
 }
 
 void remove_if_exists(const std::string& path) {

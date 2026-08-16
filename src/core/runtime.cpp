@@ -1,5 +1,7 @@
 #include "core/runtime.h"
 
+#include "model/model_registry.h"
+
 namespace syj::edgemind {
 
 namespace {
@@ -62,6 +64,28 @@ std::string Runtime::load(const RuntimeConfig& config) {
     // passed, so a transient failure to persist a session-start timestamp
     // should not block loading a model that was otherwise allowed.
     usage_manager_->session_start();
+
+    // Phase 3 gate: MODEL IMPORT/DISCOVERY -> GGUF VALIDATION -> MODEL
+    // IDENTITY -> VERIFICATION -> REGISTRY, all performed by
+    // ModelRegistry::import_model() (which composes ModelVerifier
+    // internally — see model_verifier.h). This happens BEFORE
+    // engine_->load() is called at all, so an invalid/unverified file
+    // never reaches InferenceEngine, memory admission, or
+    // llama_model_load_from_file(). A checksum is only compared when
+    // config.expected_model_checksum_sha256 is non-empty (see
+    // RuntimeConfig's comment); GGUF structural validation is mandatory
+    // either way.
+    bool verification_was_new_entry = false;
+    const VerificationResult verification = ModelRegistry::import_model(
+        config.model_registry_path, config.model_path, config.expected_model_checksum_sha256,
+        &verification_was_new_entry);
+    last_verification_diagnostic_ = verification.diagnostic;
+    if (!is_verified(verification.status)) {
+        last_error_ = RuntimeError::ModelVerificationFailed;
+        std::string msg = "ERROR: Model verification failed.\n\n";
+        msg += verification.diagnostic;
+        return msg;
+    }
 
     const EngineError err = engine_->load(config);
     last_error_ = to_runtime_error(err);

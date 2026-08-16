@@ -74,6 +74,19 @@ struct RuntimeConfig {
 
     static constexpr int64_t SYJ_EDGEMIND_MAX_SANE_LIMIT = 1'000'000'000;
     static constexpr int64_t SYJ_EDGEMIND_MIN_RESET_PERIOD_SECONDS = 60;
+
+    // Phase 3: model verification. An empty expected_model_checksum_sha256
+    // means "no checksum configured" — GGUF structural verification is
+    // still mandatory regardless (see ModelVerifier), this only controls
+    // whether an additional checksum comparison is performed. Comparison
+    // is case-insensitive (see ModelVerifier::verify).
+    std::string expected_model_checksum_sha256;
+
+    // Local path for the persisted model registry (see ModelRegistry).
+    // Same "simple dotfile in the working directory, override if you care"
+    // posture as usage_state_path above, for the same platform-portability
+    // reason.
+    std::string model_registry_path = ".syj_edgemind_model_registry";
 };
 
 // Validates a RuntimeConfig. Returns an empty string if valid, or a

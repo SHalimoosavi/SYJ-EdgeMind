@@ -96,6 +96,12 @@ add_library(syj-edgemind-core STATIC
     src/usage/usage_accounting.cpp
     src/usage/usage_state_store.cpp
     src/usage/usage_manager.cpp
+    src/model/model_types.cpp
+    src/model/gguf_reader.cpp
+    src/model/model_hash.cpp
+    src/model/model_metadata.cpp
+    src/model/model_verifier.cpp
+    src/model/model_registry.cpp
     src/inference/inference_engine.cpp
     src/inference/sampler.cpp
     src/api/edge_mind_api.cpp
@@ -112,6 +118,18 @@ target_link_libraries(syj-edgemind-core
     PRIVATE
         syj_edgemind_warnings
 )
+
+# Phase 3's src/model/model_verifier.cpp and model_registry.cpp use
+# std::filesystem. On GCC < 9, libstdc++'s filesystem implementation was a
+# separate library that must be linked explicitly; GCC 9+ and all modern
+# Clang (including current Android NDK toolchains, which is what
+# Android/Termux builds use) bundle it into libstdc++/libc++ directly, so
+# this only applies to an old, otherwise-unsupported compiler — included
+# for defensiveness, not because it's expected to trigger on any of this
+# project's actual supported-platforms.md targets.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    target_link_libraries(syj-edgemind-core PUBLIC stdc++fs)
+endif()
 
 target_compile_features(syj-edgemind-core PUBLIC cxx_std_17)
 

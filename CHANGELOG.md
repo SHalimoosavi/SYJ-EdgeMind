@@ -5,6 +5,24 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Phase 3: Model Registry & Verification
+
+- `src/model/` module: `model_types.h/.cpp` (pure structs/enums — `GgufValidationStatus`, `ModelMetadata`, `ModelIdentity`, `VerificationStatus`/`VerificationResult`, `RegistryEntry`, sanity-ceiling constants), `gguf_reader.{h,cpp}` (parses GGUF header + metadata KV section directly against the public spec — deliberately zero llama.cpp dependency, so a malformed file is rejected before llama.cpp's own parser ever sees it), `model_hash.{h,cpp}` (self-contained streaming SHA-256, FIPS 180-4 — no crypto dependency added), `model_metadata.{h,cpp}` (llama_ftype -> human label table, presentation-only), `model_verifier.{h,cpp}` (composes filesystem checks + GGUF validation + identity + optional checksum comparison), `model_registry.{h,cpp}` (local, percent-encoded, atomically-persisted registry keyed by content hash)
+- `Runtime::load()` gained a model-verification gate, inserted between usage/quota admission and memory admission: config validation -> quota admission -> **model verification** -> memory admission -> model loading. A failed/unverified model never reaches `InferenceEngine::load()` or `llama_model_load_from_file()`
+- New `RuntimeError::ModelVerificationFailed`; new `RuntimeConfig` fields `expected_model_checksum_sha256` (optional, empty = no checksum comparison) and `model_registry_path` (default `.syj_edgemind_model_registry`)
+- New C API: `SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED` (same handle-kept-alive-for-diagnostic-retrieval pattern as `MEMORY_BUDGET_EXCEEDED`/`QUOTA_EXCEEDED`), `syj_edgemind_get_verification_report()`, corresponding config fields
+- New CLI flags `--checksum`/`--registry-path` and interactive `/verify` command (SYJ EdgeMind's own pre-load GGUF-level report, distinct from `/info`'s post-load llama.cpp-derived view); load now prints "Verifying and loading model: ..."
+- Tests: `test_gguf_reader` (12 real byte-correct fixtures, including two adversarial "absurd declared length" cases), `test_model_hash` (real NIST/FIPS 180-4 known-answer vectors + real-file cross-check against system `sha256sum`), `test_model_verifier`, `test_model_registry` (persistence round-trip, corruption detection, import/dedup, lookup) — all under `tests/model/`
+- `tests/usage/test_temp_dir.h` promoted to shared `tests/test_temp_dir.h` (now used by both `tests/usage/` and `tests/model/`) rather than duplicated
+- Docs: new `docs/model-registry.md`; updates to `docs/architecture.md`, `README.md`, `ROADMAP.md`
+
+### Known limitations (Phase 3)
+
+- No `/models` (list-all) or standalone `/import` (register without loading) CLI command — the acceptance criterion is met by the automatic import-and-verify step inside every model load; a registry-browsing UI is deferred, not silently dropped (see `docs/model-registry.md`)
+- `GgufReader` validates the header and metadata KV section only, never the tensor-info section or tensor data itself — llama.cpp's own loader remains the backstop for tensor-level corruption
+- `model_ftype_name()`'s quantization-label table was checked against llama.cpp's `master` branch, not byte-for-byte against the pinned tag `b10375` (presentation-only risk, not a verification-correctness risk)
+- Not build-verified against real llama.cpp, a real GGUF model, or real hardware in the sandbox used to implement this — llama.cpp-independent components (all of `src/model/`) were compiled and run for real (4/4 new test binaries pass); `Runtime`/C API/CLI integration points were syntax-checked only. See `docs/development.md` and `docs/model-registry.md`'s "Validation status" section.
+
 ### Added — v0.3.0: Usage/Quota Manager (parallel initiative, not part of the original phase-numbered roadmap — see ROADMAP.md's discrepancy note)
 
 - `src/usage/` module mirroring the memory subsystem's pure/bridge split: `usage_types.h` (pure structs — `UsagePolicy`, `UsageState`, `UsageDecision`), `usage_accounting.{h,cpp}` (pure logic, injectable clock, zero I/O), `usage_state_store.{h,cpp}` (the sole file touching the filesystem — versioned, validated, atomically written via write-temp-then-`rename()`), `usage_manager.{h,cpp}` (coordinates the two, owns the real-vs-fake clock)

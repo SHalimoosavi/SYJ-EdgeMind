@@ -43,3 +43,57 @@ add_test(NAME test_usage_state_store COMMAND test_usage_state_store)
 add_executable(test_usage_manager usage/test_usage_manager.cpp)
 target_link_libraries(test_usage_manager PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_usage_manager COMMAND test_usage_manager)
+
+# Phase 3: model registry & verification. test_gguf_reader and
+# test_model_hash link only their specific src/model/*.cpp translation
+# units (not the whole syj-edgemind-core library) since GgufReader and
+# Sha256/compute_model_identity are deliberately llama.cpp-independent —
+# linking the full core library here would obscure that boundary and pull
+# in an unnecessary llama dependency for a test that doesn't need it.
+# test_model_verifier and test_model_registry need the same targeted set of
+# translation units plus model_metadata.cpp (for the quantization-label
+# lookup ModelRegistry::import_model uses).
+add_executable(test_gguf_reader model/test_gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_types.cpp
+)
+target_include_directories(test_gguf_reader PRIVATE ${CMAKE_SOURCE_DIR}/src model)
+target_link_libraries(test_gguf_reader PRIVATE syj_edgemind_warnings)
+add_test(NAME test_gguf_reader COMMAND test_gguf_reader)
+
+add_executable(test_model_hash model/test_model_hash.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_hash.cpp
+)
+target_include_directories(test_model_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_model_hash PRIVATE syj_edgemind_warnings)
+add_test(NAME test_model_hash COMMAND test_model_hash)
+
+add_executable(test_model_verifier model/test_model_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_hash.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_metadata.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_types.cpp
+)
+target_include_directories(test_model_verifier PRIVATE ${CMAKE_SOURCE_DIR}/src model)
+target_link_libraries(test_model_verifier PRIVATE syj_edgemind_warnings)
+add_test(NAME test_model_verifier COMMAND test_model_verifier)
+
+add_executable(test_model_registry model/test_model_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_hash.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_metadata.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_types.cpp
+)
+target_include_directories(test_model_registry PRIVATE ${CMAKE_SOURCE_DIR}/src model)
+target_link_libraries(test_model_registry PRIVATE syj_edgemind_warnings)
+add_test(NAME test_model_registry COMMAND test_model_registry)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    # See the matching comment in the top-level CMakeLists.txt.
+    target_link_libraries(test_gguf_reader PRIVATE stdc++fs)
+    target_link_libraries(test_model_verifier PRIVATE stdc++fs)
+    target_link_libraries(test_model_registry PRIVATE stdc++fs)
+endif()

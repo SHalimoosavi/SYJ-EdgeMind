@@ -6,6 +6,7 @@
 
 #include "core/config.h"
 #include "inference/inference_engine.h"
+#include "model/model_types.h"
 #include "usage/usage_manager.h"
 
 namespace syj::edgemind {
@@ -16,9 +17,18 @@ namespace syj::edgemind {
 // human-readable message string. RuntimeError is a superset of EngineError
 // (adds InvalidConfig, for failures caught by validate_config() before the
 // engine is ever touched; NotLoaded, for operations attempted on a Runtime
-// that never successfully loaded; and QuotaExceeded, for the v0.3.0 usage/
-// quota admission gate — evaluated BEFORE memory admission/model loading,
-// per the documented pipeline in docs/architecture.md).
+// that never successfully loaded; QuotaExceeded, for the v0.3.0 usage/
+// quota admission gate; and ModelVerificationFailed, for the Phase 3 model
+// verification gate — evaluated BEFORE memory admission/model loading, per
+// the documented pipeline in docs/architecture.md). ModelVerificationFailed
+// is deliberately a single value covering every VerificationStatus other
+// than Verified (missing file, wrong format, corrupted metadata, checksum
+// mismatch, etc.) — the granular classification lives in
+// VerificationStatus itself (see src/model/model_types.h) and is available
+// via Runtime::verification_report(); RuntimeError only needs to answer
+// "did the model pass or not", mirroring how MemoryBudgetExceeded is one
+// RuntimeError value even though MemoryBudgetPolicy's own diagnostic is
+// more detailed.
 enum class RuntimeError {
     None,
     InvalidConfig,
@@ -30,6 +40,7 @@ enum class RuntimeError {
     MemoryBudgetExceeded,
     NotLoaded,
     QuotaExceeded,
+    ModelVerificationFailed,
 };
 
 // The top-level object platform code (CLI today; Windows/iOS wrappers in
@@ -44,14 +55,19 @@ public:
     Runtime& operator=(const Runtime&) = delete;
 
     // Validates `config`, checks usage/quota admission (see UsageManager),
+    // verifies the model file (see ModelVerifier/ModelRegistry — Phase 3),
     // then loads the model. On any failure, returns a human-readable error
     // and the Runtime remains unloaded (is_ready() returns false) — it
     // never leaves a half-initialized runtime in place. Order of checks:
-    // config validation -> quota admission -> memory admission (inside
-    // InferenceEngine::load()) -> model loading. A denied quota check never
-    // reaches memory admission or touches the model at all.
+    // config validation -> quota admission -> model verification -> memory
+    // admission (inside InferenceEngine::load()) -> model loading. A denied
+    // quota check never reaches model verification; a failed verification
+    // never reaches memory admission, model loading, or llama.cpp at all —
+    // this is the gate that keeps an unverified/malformed file from ever
+    // being handed to llama_model_load_from_file().
     // See last_error() for a machine-readable classification of the same
-    // outcome.
+    // outcome, and verification_report() for the detailed
+    // VerificationStatus-level diagnostic.
     std::string load(const RuntimeConfig& config);
 
     bool is_ready() const;
@@ -82,6 +98,13 @@ public:
     // was never called, this reports against config()'s default policy.
     std::string usage_report() const;
 
+    // Phase 3: the model-verification diagnostic from the most recent
+    // load() attempt (STATUS: VERIFIED/REJECTED, plus metadata/identity
+    // when available — see ModelVerifier::verify's diagnostic format).
+    // Populated even when load() failed due to verification specifically,
+    // same "inspectable regardless of outcome" posture as memory_report().
+    std::string verification_report() const { return last_verification_diagnostic_; }
+
     // Machine-readable classification of the outcome of the most recent
     // load() or generate() call — the explicit, non-string-matching
     // source of truth the C API status mapping is built from.
@@ -93,6 +116,7 @@ private:
     RuntimeConfig config_;
     bool ready_ = false;
     RuntimeError last_error_ = RuntimeError::None;
+    std::string last_verification_diagnostic_;
 };
 
 } // namespace syj::edgemind
