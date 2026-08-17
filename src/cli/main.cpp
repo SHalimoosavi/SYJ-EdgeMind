@@ -22,7 +22,10 @@ void print_usage(const char* argv0) {
         "Usage:\n"
         "  %s --model <path.gguf> [options] [\"prompt\"]\n\n"
         "Options:\n"
-        "  --model <path>         Path to a local GGUF model file (required)\n"
+        "  --model <path>         Path to a local GGUF model file\n"
+        "  --model-id <sha256>    Load a model already in the registry, by its content\n"
+        "                         hash (see /models). Mutually exclusive with --model;\n"
+        "                         exactly one of the two is required.\n"
         "  --context <n>          Context size in tokens (default: 1024)\n"
         "  --threads <n>          CPU threads (default: hardware concurrency, min 1)\n"
         "  --temperature <f>      Sampling temperature (default: 0.7)\n"
@@ -43,6 +46,8 @@ void print_usage(const char* argv0) {
         "                            regardless of whether this is set)\n"
         "  --registry-path <p>       Local file for the model registry\n"
         "                            (default: .syj_edgemind_model_registry)\n"
+        "  --list-models             List every model in the local registry and exit\n"
+        "                            (no --model/--model-id required for this)\n"
         "  -h, --help             Show this help and exit\n\n"
         "If a prompt is given as a trailing argument, SYJ EdgeMind generates a\n"
         "single response and exits. Otherwise it starts interactive mode:\n"
@@ -50,9 +55,13 @@ void print_usage(const char* argv0) {
         "  /info    show loaded model info (from llama.cpp, after loading)\n"
         "  /verify  show the model-verification report (from SYJ EdgeMind's own\n"
         "           GGUF reader, independent of llama.cpp)\n"
+        "  /models  list every model in the local registry (id, name,\n"
+        "           architecture, quantization, verification status)\n"
         "  /memory  show the memory-budget diagnostic from the last load\n"
         "  /usage   show current usage, remaining quota, and reset time\n"
         "  /reset   clear the context and start fresh\n"
+        "  /unload  release the loaded model (does not load a different one —\n"
+        "           restart to load again; see docs/model-registry.md)\n"
         "  /quit    exit\n",
         argv0);
 }
@@ -144,6 +153,21 @@ void print_verification_report(const syj_edgemind_runtime* rt) {
     std::printf("%s\n", buf.c_str());
 }
 
+// v0.5.0. `registry_path` may be NULL — syj_edgemind_list_models() applies
+// the same "use SYJ EdgeMind's default" resolution as every other optional
+// registry_path use in this CLI. Does not require a loaded runtime; safe
+// to call for discovery before --model/--model-id has even been decided.
+void print_models_list(const char* registry_path) {
+    const size_t needed = syj_edgemind_list_models(registry_path, nullptr, 0);
+    if (needed == 0) {
+        std::printf("No models registered yet. Import one with --model <path>.\n");
+        return;
+    }
+    std::string buf(needed + 1, '\0');
+    syj_edgemind_list_models(registry_path, buf.data(), buf.size());
+    std::printf("%s", buf.c_str());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -151,8 +175,10 @@ int main(int argc, char** argv) {
     syj_edgemind_default_config(&config);
 
     std::string model_path;
+    std::string model_id;
     std::string trailing_prompt;
     bool have_trailing_prompt = false;
+    bool list_models_and_exit = false;
 
     unsigned hw_threads = std::thread::hardware_concurrency();
     if (hw_threads > 0) {
@@ -175,6 +201,10 @@ int main(int argc, char** argv) {
             return 0;
         } else if (arg == "--model") {
             model_path = next("--model");
+        } else if (arg == "--model-id") {
+            model_id = next("--model-id");
+        } else if (arg == "--list-models") {
+            list_models_and_exit = true;
         } else if (arg == "--context") {
             if (!parse_int_arg(next("--context"), &config.context_size)) {
                 std::fprintf(stderr, "ERROR: --context expects an integer.\n");
@@ -255,12 +285,30 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (model_path.empty()) {
-        std::fprintf(stderr, "ERROR: --model is required.\n\n");
+    if (list_models_and_exit) {
+        print_models_list(config.model_registry_path);
+        return 0;
+    }
+
+    if (model_path.empty() && model_id.empty()) {
+        std::fprintf(stderr, "ERROR: either --model <path> or --model-id <sha256> is required.\n\n");
         print_usage(argv[0]);
         return 2;
     }
-    config.model_path = model_path.c_str();
+    if (!model_path.empty() && !model_id.empty()) {
+        // No precedence rule exists for this case — see
+        // src/model/model_resolver.h. Reject at the CLI layer with a
+        // clear usage error rather than letting it fall through to
+        // validate_config()'s more generic message.
+        std::fprintf(stderr, "ERROR: --model and --model-id are mutually exclusive; use exactly one.\n\n");
+        print_usage(argv[0]);
+        return 2;
+    }
+    if (!model_path.empty()) {
+        config.model_path = model_path.c_str();
+    } else {
+        config.model_id = model_id.c_str();
+    }
 
     std::printf("SYJ EdgeMind\nOffline Local AI\nContext: %d   Threads: %d   Memory budget: %lld MB (reserve %lld MB)\n",
                 config.context_size, config.threads,
@@ -282,7 +330,8 @@ int main(int argc, char** argv) {
         std::printf("\n");
     }
     std::printf("\n");
-    std::printf("Verifying and loading model: %s ...\n", model_path.c_str());
+    std::printf("Verifying and loading model: %s ...\n",
+                !model_path.empty() ? model_path.c_str() : ("model_id=" + model_id).c_str());
 
     syj_edgemind_status status = SYJ_EDGEMIND_OK;
     syj_edgemind_runtime* rt = syj_edgemind_create(&config, &status);
@@ -312,6 +361,10 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "ERROR: %s\n", syj_edgemind_status_message(status));
         if (status == SYJ_EDGEMIND_ERROR_MODEL_NOT_FOUND) {
             std::fprintf(stderr, "  %s\n", model_path.c_str());
+        }
+        if (status == SYJ_EDGEMIND_ERROR_MODEL_RESOLUTION_FAILED) {
+            std::fprintf(stderr, "  %s\n",
+                         !model_path.empty() ? ("--model " + model_path).c_str() : ("--model-id " + model_id).c_str());
         }
         return 1;
     }
@@ -348,7 +401,16 @@ int main(int argc, char** argv) {
         if (line == "/quit") {
             break;
         } else if (line == "/help") {
-            std::printf("Commands: /help  /info  /verify  /memory  /usage  /reset  /quit\n");
+            std::printf("Commands: /help  /info  /verify  /models  /memory  /usage  /reset  /unload  /quit\n");
+            continue;
+        } else if (line == "/models") {
+            print_models_list(config.model_registry_path);
+            continue;
+        } else if (line == "/unload") {
+            syj_edgemind_unload(rt);
+            std::printf("Model unloaded. /memory, /verify, and /usage remain available; generating a new\n"
+                        "prompt or /info will report the runtime as not loaded — restart to load a model\n"
+                        "again (v0.5.0 does not support reloading a different model into a running session).\n");
             continue;
         } else if (line == "/info") {
             print_model_info(rt);

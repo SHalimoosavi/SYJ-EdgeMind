@@ -87,16 +87,46 @@ The CLI gained `--checksum <sha256>` and `--registry-path <path>` flags, a `/ver
 
 ## Deliberately out of scope for this phase
 
-- **A `/models` (list-all) or standalone `/import` (register without loading) CLI command.** The core acceptance criterion — verify before inference — is already satisfied by the automatic import-and-verify step inside every `--model` load; a separate registry-browsing/standalone-import UI is a real, legitimate feature but would need new C API surface (listing, formatting) not required to meet this phase's criterion. Deferred, not silently dropped.
+- **A `/models` (list-all) or standalone `/import` (register without loading) CLI command.** The core acceptance criterion — verify before inference — is already satisfied by the automatic import-and-verify step inside every `--model` load; a separate registry-browsing/standalone-import UI is a real, legitimate feature but would need new C API surface (listing, formatting) not required to meet this phase's criterion. **Update, v0.5.0: `/models` and `--list-models` were added — see below. Standalone `/import` remains deferred.**
 - **Tensor-info-section parsing.** `GgufReader` deliberately stops after the metadata KV section — it never validates individual tensor shapes/offsets/types. This is consistent with "verification should be cheap, not a full model load" but means a file with a structurally valid header+metadata and a corrupted tensor section would still pass `GgufReader::validate()`; llama.cpp's own loader (downstream, after verification) is the actual backstop for tensor-level corruption.
 - **`model_ftype_name()`'s table was checked against llama.cpp's `master` branch, not the exact pinned tag `b10375`** — the sandbox that produced this could not fetch that specific tag's header byte-for-byte. This is a presentation-only risk (a possibly-stale human-readable label), not a verification-correctness risk — see `model_metadata.h`'s header comment.
 
+## v0.5.0: Runtime Model Loading & Inference Integration
+
+Extends the pipeline above with one more stage, inserted between quota admission and model verification: **model resolution**.
+
+```
+config validation -> quota admission -> RESOLUTION -> model verification -> memory admission -> model loading
+```
+
+`resolve_model_path()` (`src/model/model_resolver.h/.cpp`) turns `RuntimeConfig::model_path` OR `RuntimeConfig::model_id` (exactly one must be set — see `validate_config`) into a single filesystem path. For `model_id`, it performs a **read-only** lookup against `ModelRegistry::load()` — the existing, unmodified registry loader — and returns the matching entry's `local_path`. It does not verify, hash, parse GGUF, touch llama.cpp, perform memory/usage admission, or write to the registry; every one of those responsibilities stays exactly where Phase 3 already put them. Resolving by identity is **not** a verification shortcut — the resolved path is fed into the same `ModelRegistry::import_model()` call a direct path would go through, so it is re-verified (structure, and hash re-computed) every single time, never trusting a cached "this was verified once" flag.
+
+**Model lifecycle** — the full picture, v0.5.0 additions in bold:
+
+```
+discover (**/models, --list-models**) -> **resolve** (path or id) -> verify -> register
+   -> memory admission -> load -> inference -> **unload**
+```
+
+**Unload.** `InferenceEngine::unload()` and `Runtime::unload()` are new, idempotent, and release the loaded model/context without tearing down the llama.cpp backend (which stays tied to the engine's own full lifetime, unchanged from before). `InferenceEngine::load()` now calls `unload()` at its own start — this closes a real gap found while auditing for this milestone: previously, calling `load()` a second time on one `InferenceEngine` instance overwrote `model_`/`ctx_` without freeing the prior handles, a genuine leak. The fix extracts the destructor's existing cleanup logic verbatim rather than rewriting it.
+
+**ABI note.** `syj_edgemind_config` gained a `model_id` field, appended to the end. This is source-compatible (any caller that recompiles is unaffected) but not safely binary-ABI-stable for a hypothetical prebuilt binary linked against an older header against a newer shared library — see the ABI COMPATIBILITY block at the top of `src/api/edge_mind_api.h` for the full reasoning, including why retrofitting a `struct_size`/version field as the struct's first member was rejected (it would have broken the one real external artifact that exists, v0.4.0-alpha, by shifting every existing field's offset). The smallest available fix — `SYJ_EDGEMIND_ABI_VERSION` + `syj_edgemind_abi_version()`, no struct layout change — was added instead.
+
+**CLI additions.** `--model-id <sha256>` (mutually exclusive with `--model`), `--list-models` (works standalone, no model load required), `/models` and `/unload` in interactive mode. `/unload` is deliberately one-way in this release: there is no reload-a-different-model-without-restarting command, by design — adding one would cross into "interactive model-management subsystem" territory that was explicitly out of scope for this milestone.
+
+## Deliberately out of scope for v0.5.0
+
+- Reloading a different model into an already-running interactive session (restart is required)
+- Auto-deriving `context_size` from a model's GGUF `context_length` metadata (would be a silent behavior change; the metadata remains available for a human to read, not for the runtime to act on automatically)
+- Any server/cloud/auth/multi-user/marketplace/downloader capability — none of it is related to "make a verified model usable by the runtime," and none was built
+
 ## Validation status
 
-**What was validated for real, in this sandbox:**
+**What was validated for real, in this sandbox (Phase 3 + v0.5.0 combined):**
 - `GgufReader` against 12 real, byte-correct fixtures (valid GGUF v2 and v3, invalid magic, truncated header, truncated mid-metadata, empty file, two adversarial "absurd declared length" cases, unknown value-type code, missing-architecture-key, nonexistent path) — every case produced the correct status, no crashes, no unbounded allocation observed on the adversarial cases.
 - `Sha256` against real NIST/FIPS 180-4 known-answer vectors, and `compute_model_identity()` against real files cross-checked byte-for-byte against system `sha256sum`.
-- `ModelVerifier` and `ModelRegistry` each via a dedicated real test binary (`tests/model/test_model_verifier.cpp`, `tests/model/test_model_registry.cpp`) covering filesystem checks, checksum match/mismatch/case-insensitivity, corruption detection, import/dedup, and lookup.
-- `src/core/config.cpp` compiled for real (no llama.cpp dependency). `src/core/runtime.cpp`, `src/api/edge_mind_api.cpp`, and `src/cli/main.cpp` were **syntax-checked** (`g++ -fsyntax-only`) — genuinely llama.cpp-independent checks for `runtime.cpp` and `main.cpp` (both only depend on forward-declared/opaque types), not stub-dependent.
+- `ModelVerifier`, `ModelRegistry`, and `model_resolver` each via a dedicated real test binary — filesystem checks, checksum match/mismatch/case-insensitivity, corruption detection, import/dedup, lookup, direct-path passthrough, neither/both-provided rejection, id-not-found vs. registry-corrupted as distinct errors, real identity-based resolution, and a check that resolution never mutates the registry.
+- `src/core/config.cpp` (including the new model_path/model_id exactly-one-of validation) compiled and its extended test suite run for real, no llama.cpp dependency. `src/core/runtime.cpp`, `src/api/edge_mind_api.cpp`, and `src/cli/main.cpp` were **syntax-checked** (`g++ -fsyntax-only`) — genuinely llama.cpp-independent checks for `runtime.cpp` and `main.cpp` (both only depend on forward-declared/opaque types), not stub-dependent. `src/inference/inference_engine.cpp` (including the new `unload()`) was syntax-checked against the same hand-written stub `llama.h` used throughout this project, never a real linked llama.cpp.
+- 11/11 real test binaries pass in this sandbox as of v0.5.0, zero regressions against everything Phase 0–3/v0.3.0 already established.
 
-**What was NOT validated (same limitation as every prior phase in this project):** this sandbox has no `.git` (never a real clone), no `cmake` binary (network-blocked package install, confirmed this session), and no real llama.cpp link. `cmake -S . -B build`, `ctest --test-dir build --output-on-failure`, `git diff --check`, and any Android/Termux/real-hardware run are all pending the maintainer's own environment — exactly the "hardware/runtime validation pending" status `ROADMAP.md` records for this phase, per the phase's own instruction not to mark it Done otherwise.
+**What was NOT validated (same limitation as every prior phase in this project):** this sandbox has no `.git` (never a real clone), no `cmake` binary (network-blocked package install, confirmed repeatedly), and no real llama.cpp link. `cmake -S . -B build`, `ctest --test-dir build --output-on-failure`, `git diff --check`, and any Android/Termux/real-hardware run — **including the unload/reload lifecycle actually exercised against a real, linked llama.cpp** — are all pending the maintainer's own environment. This is explicitly the biggest open item for v0.5.0: the double-load leak fix and the unload/reload cycle are exactly the kind of resource-lifecycle code that most needs real-hardware confirmation and least benefits from sandbox syntax-checking alone.

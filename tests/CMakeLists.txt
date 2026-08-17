@@ -91,9 +91,28 @@ target_include_directories(test_model_registry PRIVATE ${CMAKE_SOURCE_DIR}/src m
 target_link_libraries(test_model_registry PRIVATE syj_edgemind_warnings)
 add_test(NAME test_model_registry COMMAND test_model_registry)
 
+# v0.5.0: model_resolver is pure/llama.cpp-independent, but it does depend
+# on ModelRegistry (a read-only registry lookup — see model_resolver.h), so
+# its test needs the same registry+verifier translation units as
+# test_model_registry above, plus test_gguf_fixture.h to construct real
+# GGUF fixtures for the "resolve a real imported model_id" cases.
+add_executable(test_model_resolver model/test_model_resolver.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_resolver.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_hash.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_metadata.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_types.cpp
+)
+target_include_directories(test_model_resolver PRIVATE ${CMAKE_SOURCE_DIR}/src model)
+target_link_libraries(test_model_resolver PRIVATE syj_edgemind_warnings)
+add_test(NAME test_model_resolver COMMAND test_model_resolver)
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
     # See the matching comment in the top-level CMakeLists.txt.
     target_link_libraries(test_gguf_reader PRIVATE stdc++fs)
     target_link_libraries(test_model_verifier PRIVATE stdc++fs)
     target_link_libraries(test_model_registry PRIVATE stdc++fs)
+    target_link_libraries(test_model_resolver PRIVATE stdc++fs)
 endif()

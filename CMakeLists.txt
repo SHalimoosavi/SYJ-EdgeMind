@@ -102,6 +102,7 @@ add_library(syj-edgemind-core STATIC
     src/model/model_metadata.cpp
     src/model/model_verifier.cpp
     src/model/model_registry.cpp
+    src/model/model_resolver.cpp
     src/inference/inference_engine.cpp
     src/inference/sampler.cpp
     src/api/edge_mind_api.cpp

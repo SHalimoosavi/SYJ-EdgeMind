@@ -30,11 +30,31 @@ int main() {
         check(validate_config(cfg).empty(), "valid config should have no validation error");
     }
 
-    // Empty model path is rejected.
+    // Neither model_path nor model_id set is rejected (v0.5.0: previously
+    // this was simply "empty model_path"; now exactly one of the two
+    // identifiers must be set — see resolve_model_path()).
     {
         RuntimeConfig cfg;
         cfg.model_path = "";
-        check(!validate_config(cfg).empty(), "empty model_path should be rejected");
+        check(!validate_config(cfg).empty(), "neither model_path nor model_id set should be rejected");
+    }
+
+    // v0.5.0: model_id alone (no model_path) is valid at the config level —
+    // resolution against the registry happens later, not during
+    // validate_config().
+    {
+        RuntimeConfig cfg;
+        cfg.model_id = std::string(64, 'a');
+        check(validate_config(cfg).empty(), "model_id alone (no model_path) should have no validation error");
+    }
+
+    // v0.5.0: both model_path and model_id set is rejected — no precedence
+    // rule exists for this codebase to guess at (see model_resolver.h).
+    {
+        RuntimeConfig cfg;
+        cfg.model_path = "model.gguf";
+        cfg.model_id = std::string(64, 'a');
+        check(!validate_config(cfg).empty(), "both model_path and model_id set should be rejected");
     }
 
     // Context size below the sanity minimum is rejected.

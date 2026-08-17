@@ -45,11 +45,12 @@ std::string Runtime::load(const RuntimeConfig& config) {
         return validation_error;
     }
 
-    // v0.3.0 pipeline: config validation -> quota admission -> memory
-    // admission (inside engine_->load()) -> model loading. A denied quota
-    // check returns here WITHOUT ever touching InferenceEngine, memory
-    // observation, or the model file — it must not interfere with the
-    // Phase 2 memory-admission pipeline in either direction.
+    // v0.5.0 pipeline: config validation -> quota admission -> MODEL
+    // RESOLUTION -> model verification -> memory admission (inside
+    // engine_->load()) -> model loading. A denied quota check returns here
+    // WITHOUT ever touching resolution, verification, InferenceEngine, or
+    // the model file — the same non-interference guarantee the v0.3.0
+    // pipeline already had, just with one more stage inserted after it.
     usage_manager_ = std::make_unique<UsageManager>(config.usage_state_path);
     const UsagePolicy policy = to_usage_policy(config);
     const UsageDecision quota_decision = usage_manager_->check_admission(policy);
@@ -65,6 +66,46 @@ std::string Runtime::load(const RuntimeConfig& config) {
     // should not block loading a model that was otherwise allowed.
     usage_manager_->session_start();
 
+    // v0.5.0: resolve exactly one of model_path/model_id into an actual
+    // path. resolve_model_path() is pure and read-only (see
+    // src/model/model_resolver.h) — it does not verify, hash, or touch the
+    // registry; it only answers "which file are we even talking about".
+    // Resolving by identity is not a verification shortcut: the resolved
+    // path is re-verified below through the exact same pipeline a direct
+    // model_path would go through, every time.
+    const ModelResolutionResult resolution =
+        resolve_model_path(config.model_path, config.model_id, config.model_registry_path);
+    if (resolution.status != ModelResolutionStatus::Resolved) {
+        last_error_ = RuntimeError::ModelResolutionFailed;
+        std::string msg = "ERROR: Model resolution failed.\n\n";
+        switch (resolution.status) {
+            case ModelResolutionStatus::NeitherProvided:
+                msg += "Neither model_path nor model_id was provided.";
+                break;
+            case ModelResolutionStatus::BothProvided:
+                msg += "Both model_path and model_id were provided; exactly one is required.";
+                break;
+            case ModelResolutionStatus::ModelIdNotFound:
+                msg += "No registry entry matches model_id \"" + config.model_id + "\".";
+                break;
+            case ModelResolutionStatus::RegistryUnreadable:
+                msg += "The model registry at \"" + config.model_registry_path + "\" could not be trusted (corrupted).";
+                break;
+            case ModelResolutionStatus::Resolved:
+                break; // unreachable in this branch
+        }
+        return msg;
+    }
+
+    // A local copy of config with model_path set to the resolved path —
+    // ModelRegistry::import_model() and InferenceEngine::load() both read
+    // config.model_path directly and know nothing about model_id/
+    // resolution; they continue to operate exactly as they did before
+    // v0.5.0, just fed a path that may have come from a registry lookup
+    // instead of directly from the caller.
+    RuntimeConfig resolved_config = config;
+    resolved_config.model_path = resolution.resolved_path;
+
     // Phase 3 gate: MODEL IMPORT/DISCOVERY -> GGUF VALIDATION -> MODEL
     // IDENTITY -> VERIFICATION -> REGISTRY, all performed by
     // ModelRegistry::import_model() (which composes ModelVerifier
@@ -77,8 +118,8 @@ std::string Runtime::load(const RuntimeConfig& config) {
     // either way.
     bool verification_was_new_entry = false;
     const VerificationResult verification = ModelRegistry::import_model(
-        config.model_registry_path, config.model_path, config.expected_model_checksum_sha256,
-        &verification_was_new_entry);
+        resolved_config.model_registry_path, resolved_config.model_path,
+        resolved_config.expected_model_checksum_sha256, &verification_was_new_entry);
     last_verification_diagnostic_ = verification.diagnostic;
     if (!is_verified(verification.status)) {
         last_error_ = RuntimeError::ModelVerificationFailed;
@@ -87,7 +128,11 @@ std::string Runtime::load(const RuntimeConfig& config) {
         return msg;
     }
 
-    const EngineError err = engine_->load(config);
+    // v0.5.0: engine_->load() now safely releases any previously-loaded
+    // model/context at its own start (see InferenceEngine::load's updated
+    // comment) — calling load() a second time on this Runtime, or after an
+    // explicit unload(), cannot leak the previous model's handles.
+    const EngineError err = engine_->load(resolved_config);
     last_error_ = to_runtime_error(err);
 
     if (err != EngineError::None) {
@@ -95,7 +140,7 @@ std::string Runtime::load(const RuntimeConfig& config) {
         msg += engine_error_message(err);
         if (err == EngineError::ModelFileNotFound) {
             msg += "\n  ";
-            msg += config.model_path;
+            msg += resolved_config.model_path;
         }
         if (err == EngineError::MemoryBudgetExceeded) {
             msg += "\n\n";
@@ -104,9 +149,22 @@ std::string Runtime::load(const RuntimeConfig& config) {
         return msg;
     }
 
-    config_ = config;
+    config_ = resolved_config;
     ready_ = true;
     return std::string();
+}
+
+void Runtime::unload() {
+    if (engine_) {
+        engine_->unload();
+    }
+    ready_ = false;
+    // Deliberately NOT touching usage_manager_, last_verification_diagnostic_,
+    // or config_ — usage/quota state is scoped to the install, not to any
+    // one loaded model (see this function's header comment), and the last
+    // verification/config remain available for inspection after unload,
+    // same as memory_report()/verification_report() already stay
+    // inspectable after a failed load.
 }
 
 bool Runtime::is_ready() const {

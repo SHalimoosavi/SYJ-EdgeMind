@@ -7,6 +7,7 @@
 #include "core/config.h"
 #include "inference/inference_engine.h"
 #include "model/model_types.h"
+#include "model/model_resolver.h"
 #include "usage/usage_manager.h"
 
 namespace syj::edgemind {
@@ -18,17 +19,16 @@ namespace syj::edgemind {
 // (adds InvalidConfig, for failures caught by validate_config() before the
 // engine is ever touched; NotLoaded, for operations attempted on a Runtime
 // that never successfully loaded; QuotaExceeded, for the v0.3.0 usage/
-// quota admission gate; and ModelVerificationFailed, for the Phase 3 model
-// verification gate — evaluated BEFORE memory admission/model loading, per
-// the documented pipeline in docs/architecture.md). ModelVerificationFailed
-// is deliberately a single value covering every VerificationStatus other
-// than Verified (missing file, wrong format, corrupted metadata, checksum
-// mismatch, etc.) — the granular classification lives in
-// VerificationStatus itself (see src/model/model_types.h) and is available
-// via Runtime::verification_report(); RuntimeError only needs to answer
-// "did the model pass or not", mirroring how MemoryBudgetExceeded is one
-// RuntimeError value even though MemoryBudgetPolicy's own diagnostic is
-// more detailed.
+// quota admission gate; ModelVerificationFailed, for the Phase 3 model
+// verification gate; and ModelResolutionFailed, for the v0.5.0 model_id ->
+// path resolution step, evaluated BEFORE verification — see
+// resolve_model_path() in src/model/model_resolver.h). Both
+// ModelResolutionFailed and ModelVerificationFailed are deliberately single
+// values covering several distinct sub-outcomes each — the granular
+// classification lives in ModelResolutionStatus/VerificationStatus
+// respectively (available via Runtime::verification_report() for the
+// latter), mirroring how MemoryBudgetExceeded is one RuntimeError value
+// even though MemoryBudgetPolicy's own diagnostic is more detailed.
 enum class RuntimeError {
     None,
     InvalidConfig,
@@ -41,6 +41,7 @@ enum class RuntimeError {
     NotLoaded,
     QuotaExceeded,
     ModelVerificationFailed,
+    ModelResolutionFailed,
 };
 
 // The top-level object platform code (CLI today; Windows/iOS wrappers in
@@ -81,6 +82,18 @@ public:
     std::string generate(const std::string& prompt, const TokenStreamCallback& on_token);
 
     void reset_context();
+
+    // v0.5.0: releases the loaded model and inference context, returning
+    // the Runtime to an unloaded state (is_ready() becomes false). Safe to
+    // call when nothing is loaded (idempotent — a no-op in that case) and
+    // safe to call more than once in a row. Does NOT touch usage/quota
+    // state (usage_manager_ persists across unload — quota is scoped to
+    // the local install, not to any one model) or the model registry.
+    // After unload(), load() may be called again — either with the same
+    // config to reload the same model, or a different one to switch models
+    // within this Runtime instance — and will run the exact same
+    // resolve -> verify -> admit -> load pipeline as any other load() call.
+    void unload();
 
     InferenceEngine::ModelInfo model_info() const;
     const RuntimeConfig& config() const { return config_; }

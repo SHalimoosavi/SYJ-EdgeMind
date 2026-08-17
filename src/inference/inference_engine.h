@@ -65,6 +65,20 @@ public:
     // can be generated without reloading the model. Does not reload weights.
     void reset_context();
 
+    // v0.5.0: releases the loaded model and inference context (tokenizer,
+    // context manager, llama_context, llama_model), returning this engine
+    // to an unloaded state. Idempotent — safe to call when nothing is
+    // loaded, and safe to call more than once in a row. Deliberately does
+    // NOT free the llama.cpp backend (llama_backend_init/free) — backend
+    // lifetime stays tied to this InferenceEngine instance's own lifetime
+    // exactly as it already was (see the destructor), not to any one
+    // model's load/unload cycle; re-calling load() after unload() reuses
+    // the already-initialized backend rather than tearing it down and
+    // re-initializing it for no reason. load() itself calls this at its
+    // very start, so a second load() call — with or without an explicit
+    // unload() first — can never leak a previously-loaded model/context.
+    void unload();
+
     bool is_loaded() const { return model_ != nullptr && ctx_ != nullptr; }
 
     // Basic, ACTUALLY-observed (not estimated) facts about the loaded model,

@@ -5,8 +5,16 @@
 namespace syj::edgemind {
 
 std::string validate_config(const RuntimeConfig& config) {
-    if (config.model_path.empty()) {
-        return "Model path must not be empty.";
+    const bool has_path = !config.model_path.empty();
+    const bool has_id = !config.model_id.empty();
+    if (!has_path && !has_id) {
+        return "Exactly one of model_path or model_id must be set (neither was provided).";
+    }
+    if (has_path && has_id) {
+        // No precedence rule exists for this case (see
+        // src/model/model_resolver.h) — an ambiguous config is a config
+        // error, not something to guess at.
+        return "Exactly one of model_path or model_id must be set (both were provided).";
     }
 
     if (config.context_size < RuntimeConfig::SYJ_EDGEMIND_MIN_CONTEXT ||

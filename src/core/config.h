@@ -21,6 +21,16 @@ enum class ContextProfile {
 struct RuntimeConfig {
     std::string model_path;
 
+    // v0.5.0: resolve a model by its registry identity (SHA-256 hex)
+    // instead of a direct path. Exactly one of model_path/model_id must be
+    // set — see resolve_model_path() (src/model/model_resolver.h) for the
+    // resolution rule and why "both set" is rejected rather than guessed
+    // at. Empty by default, so every existing model_path-only caller is
+    // completely unaffected (see model_resolver.h and this project's ABI
+    // notes in src/api/edge_mind_api.h for why that matters at the C API
+    // layer specifically).
+    std::string model_id;
+
     // Context size in tokens. Defaults to LOW (1024) per the Phase 1 spec's
     // conservative default. Phase 1 enforces only a sane upper bound
     // (SYJ_EDGEMIND_MAX_CONTEXT below) — it does NOT estimate whether this
@@ -91,8 +101,13 @@ struct RuntimeConfig {
 
 // Validates a RuntimeConfig. Returns an empty string if valid, or a
 // human-readable error describing the first problem found.
-// Does NOT check whether model_path exists on disk — that is a runtime
-// (not configuration) error, surfaced separately when the model is loaded.
+// Does NOT check whether model_path exists on disk, and does NOT resolve
+// model_id against the registry — both are runtime (not configuration)
+// concerns, handled by resolve_model_path() and ModelVerifier respectively,
+// surfaced separately when the model is loaded. This function only checks
+// that exactly one of model_path/model_id was provided (see
+// src/model/model_resolver.h for why "both" and "neither" are both
+// rejected rather than guessed at).
 std::string validate_config(const RuntimeConfig& config);
 
 } // namespace syj::edgemind

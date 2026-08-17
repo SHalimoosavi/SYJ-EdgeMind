@@ -35,7 +35,25 @@ bool file_exists(const std::string& path) {
 InferenceEngine::InferenceEngine() = default;
 
 InferenceEngine::~InferenceEngine() {
-    // Reverse of the acquisition order documented in inference_engine.h.
+    unload();
+    // NOTE: assumes a single InferenceEngine is used at a time within the
+    // process (true for the Phase 1 CLI). A multi-instance runtime would
+    // need a process-wide refcount around llama_backend_init/free instead
+    // of tying it to one engine's lifetime.
+    if (backend_initialized_) {
+        llama_backend_free();
+        backend_initialized_ = false;
+    }
+}
+
+void InferenceEngine::unload() {
+    // Extracted verbatim from what was previously only the destructor's
+    // cleanup (see git history) — same order, same calls, same null
+    // checks. The only change is that llama_backend_free() stays out of
+    // this function (see this function's header-comment for why) so it
+    // can be called safely more than once, and so load() can safely call
+    // it at its own start without tearing down/reinitializing the backend
+    // on every model switch.
     tokenizer_.reset();
     context_manager_.reset();
 
@@ -47,17 +65,15 @@ InferenceEngine::~InferenceEngine() {
         llama_model_free(model_);
         model_ = nullptr;
     }
-    // NOTE: assumes a single InferenceEngine is used at a time within the
-    // process (true for the Phase 1 CLI). A multi-instance runtime would
-    // need a process-wide refcount around llama_backend_init/free instead
-    // of tying it to one engine's lifetime.
-    if (backend_initialized_) {
-        llama_backend_free();
-        backend_initialized_ = false;
-    }
 }
 
 EngineError InferenceEngine::load(const RuntimeConfig& config) {
+    // v0.5.0: release any previously-loaded model/context before doing
+    // anything else, so calling load() a second time on this instance
+    // (directly, or after Runtime::unload()) can never leak the previous
+    // model's handles. A no-op when nothing was loaded yet.
+    unload();
+
     if (!file_exists(config.model_path)) {
         return EngineError::ModelFileNotFound;
     }

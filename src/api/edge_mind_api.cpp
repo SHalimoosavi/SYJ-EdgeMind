@@ -1,12 +1,18 @@
 #include "api/edge_mind_api.h"
 
 #include <cstring>
+#include <sstream>
 
 #include "core/runtime.h"
+#include "model/model_registry.h"
 
+using syj::edgemind::ModelRegistry;
+using syj::edgemind::RegistryEntry;
+using syj::edgemind::RegistryLoadResult;
 using syj::edgemind::Runtime;
 using syj::edgemind::RuntimeConfig;
 using syj::edgemind::RuntimeError;
+using syj::edgemind::verification_status_message;
 
 struct syj_edgemind_runtime {
     Runtime runtime;
@@ -63,6 +69,9 @@ RuntimeConfig to_cpp_config(const syj_edgemind_config* c) {
     if (c->model_registry_path != nullptr) {
         config.model_registry_path = c->model_registry_path;
     }
+    if (c->model_id != nullptr) {
+        config.model_id = c->model_id;
+    }
     return config;
 }
 
@@ -85,6 +94,7 @@ syj_edgemind_status to_c_status(RuntimeError err) {
         case RuntimeError::NotLoaded:            return SYJ_EDGEMIND_ERROR_NOT_LOADED;
         case RuntimeError::QuotaExceeded:        return SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED;
         case RuntimeError::ModelVerificationFailed: return SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED;
+        case RuntimeError::ModelResolutionFailed: return SYJ_EDGEMIND_ERROR_MODEL_RESOLUTION_FAILED;
     }
     return SYJ_EDGEMIND_ERROR_MODEL_LOAD_FAILED; // unreachable if RuntimeError is exhaustive above
 }
@@ -112,6 +122,11 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config) {
     out_config->usage_state_path = nullptr; // caller sees "use default"; to_cpp_config() applies RuntimeConfig's actual default path
     out_config->expected_model_checksum_sha256 = nullptr; // "no checksum configured"
     out_config->model_registry_path = nullptr; // caller sees "use default"; to_cpp_config() applies RuntimeConfig's actual default path
+    out_config->model_id = nullptr; // "resolve via model_path instead" — see the ABI-compatibility note in the header
+}
+
+int32_t syj_edgemind_abi_version(void) {
+    return SYJ_EDGEMIND_ABI_VERSION;
 }
 
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
@@ -132,6 +147,12 @@ syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
     }
     delete handle;
     return nullptr;
+}
+
+void syj_edgemind_unload(syj_edgemind_runtime* runtime) {
+    if (runtime != nullptr) {
+        runtime->runtime.unload();
+    }
 }
 
 size_t syj_edgemind_get_memory_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size) {
@@ -174,6 +195,39 @@ size_t syj_edgemind_get_verification_report(const syj_edgemind_runtime* runtime,
         return 0;
     }
     const std::string report = runtime->runtime.verification_report();
+    if (buf_size > 0 && out_buf != nullptr) {
+        const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
+        std::memcpy(out_buf, report.data(), to_copy);
+        out_buf[to_copy] = '\0';
+    }
+    return report.size();
+}
+
+size_t syj_edgemind_list_models(const char* registry_path, char* out_buf, size_t buf_size) {
+    // Same default-resolution source as to_cpp_config() — RuntimeConfig's
+    // own default member initializer, not a second hardcoded literal.
+    const std::string path = (registry_path != nullptr) ? registry_path : RuntimeConfig{}.model_registry_path;
+
+    std::vector<RegistryEntry> entries;
+    const RegistryLoadResult load_result = ModelRegistry::load(path, &entries);
+    // NotFound and Corrupted both currently produce an empty listing here —
+    // see this function's header-comment for why that distinction isn't
+    // exposed at this layer.
+    if (load_result != RegistryLoadResult::Ok || entries.empty()) {
+        if (buf_size > 0 && out_buf != nullptr) {
+            out_buf[0] = '\0';
+        }
+        return 0;
+    }
+
+    std::ostringstream oss;
+    for (const RegistryEntry& entry : entries) {
+        oss << entry.model_id << "  " << (entry.display_name.empty() ? "(unnamed)" : entry.display_name) << "  ["
+            << (entry.architecture.empty() ? "unknown-architecture" : entry.architecture) << "  "
+            << (entry.quantization.empty() ? "unknown-quantization" : entry.quantization) << "]  "
+            << verification_status_message(entry.verification_status) << "\n";
+    }
+    const std::string report = oss.str();
     if (buf_size > 0 && out_buf != nullptr) {
         const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
         std::memcpy(out_buf, report.data(), to_copy);
@@ -239,6 +293,7 @@ const char* syj_edgemind_status_message(syj_edgemind_status status) {
         case SYJ_EDGEMIND_ERROR_MEMORY_BUDGET_EXCEEDED: return "Configuration exceeds the configured memory budget.";
         case SYJ_EDGEMIND_ERROR_QUOTA_EXCEEDED:        return "Usage/quota limit reached.";
         case SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED: return "Model failed verification.";
+        case SYJ_EDGEMIND_ERROR_MODEL_RESOLUTION_FAILED: return "Could not resolve a model from model_path/model_id.";
     }
     return "Unknown status.";
 }
