@@ -120,13 +120,38 @@ discover (**/models, --list-models**) -> **resolve** (path or id) -> verify -> r
 - Auto-deriving `context_size` from a model's GGUF `context_length` metadata (would be a silent behavior change; the metadata remains available for a human to read, not for the runtime to act on automatically)
 - Any server/cloud/auth/multi-user/marketplace/downloader capability — none of it is related to "make a verified model usable by the runtime," and none was built
 
+## Phase 4: Production CLI
+
+Target: *"A technically non-expert user can run local inference with minimal configuration."*
+
+**Deterministic registry auto-selection.** When neither `--model` nor `--model-id` is given, the CLI now consults the registry (`select_model_for_cli()`, `src/core/model_selection.h/.cpp`) and behaves deterministically based on what's found:
+- **0 entries** — actionable guidance (`--model <path>` to import for the first time), never a bare "one of these is required."
+- **Exactly 1 entry** — auto-selected, with an explicit printed line naming which model and why. Never silent.
+- **2+ entries** — the full listing is printed (reusing the existing `syj_edgemind_list_models()`) and the user is required to choose explicitly via `--model`/`--model-id`. Never a guess.
+
+Critically, auto-selection does **not** bypass anything: it resolves to a `model_id`, which is then fed through the exact same v0.5.0 resolution → verification → admission → load pipeline a manually-typed `--model-id` would go through. There is no shortcut that reads `local_path` directly from the registry and skips verification.
+
+**Why `model_selection` lives in `src/core/`, not `src/cli/`.** `src/cli/main.cpp` is architecturally documented to include only `api/edge_mind_api.h` — never an internal C++ header, since the Windows platform layer (Phase 5) will wrap the same C API, not a different one. The selection logic is real C++ that consumes `ModelRegistry` directly, so it belongs alongside `Runtime` in `src/core/`, exposed to the CLI through a new C API function (`syj_edgemind_select_model()`) — the same boundary every other CLI-visible piece of state already crosses.
+
+**`/context`.** Surfaces `ContextManager`'s already-tracked `n_ctx`/`n_used`/`n_remaining` through the existing layered pattern: `ContextManager` → `InferenceEngine::context_state()` (new, pure forwarding) → `Runtime::context_report()` (new) → `syj_edgemind_get_context_report()` (new) → CLI. No accounting logic is duplicated anywhere in this chain.
+
+**ABI**: no changes to `syj_edgemind_config` for Phase 4 — both new C API functions (`syj_edgemind_select_model`, `syj_edgemind_get_context_report`) are pure additions with no struct-layout impact.
+
+## Deliberately out of scope for Phase 4
+
+GUI, first-run wizard, interactive picker UI, installer, cloud/server functionality, authentication, marketplace, model downloader, remote discovery, configuration-file system, automatic model configuration overrides, memory/usage-policy changes, inference architecture redesign — none of it relates to "minimal configuration for a non-expert," and none was built.
+
 ## Validation status
 
-**What was validated for real, in this sandbox (Phase 3 + v0.5.0 combined):**
+**What was validated for real, in this sandbox (Phase 3 + v0.5.0 + Phase 4 combined):**
 - `GgufReader` against 12 real, byte-correct fixtures (valid GGUF v2 and v3, invalid magic, truncated header, truncated mid-metadata, empty file, two adversarial "absurd declared length" cases, unknown value-type code, missing-architecture-key, nonexistent path) — every case produced the correct status, no crashes, no unbounded allocation observed on the adversarial cases.
 - `Sha256` against real NIST/FIPS 180-4 known-answer vectors, and `compute_model_identity()` against real files cross-checked byte-for-byte against system `sha256sum`.
-- `ModelVerifier`, `ModelRegistry`, and `model_resolver` each via a dedicated real test binary — filesystem checks, checksum match/mismatch/case-insensitivity, corruption detection, import/dedup, lookup, direct-path passthrough, neither/both-provided rejection, id-not-found vs. registry-corrupted as distinct errors, real identity-based resolution, and a check that resolution never mutates the registry.
-- `src/core/config.cpp` (including the new model_path/model_id exactly-one-of validation) compiled and its extended test suite run for real, no llama.cpp dependency. `src/core/runtime.cpp`, `src/api/edge_mind_api.cpp`, and `src/cli/main.cpp` were **syntax-checked** (`g++ -fsyntax-only`) — genuinely llama.cpp-independent checks for `runtime.cpp` and `main.cpp` (both only depend on forward-declared/opaque types), not stub-dependent. `src/inference/inference_engine.cpp` (including the new `unload()`) was syntax-checked against the same hand-written stub `llama.h` used throughout this project, never a real linked llama.cpp.
-- 11/11 real test binaries pass in this sandbox as of v0.5.0, zero regressions against everything Phase 0–3/v0.3.0 already established.
+- `ModelVerifier`, `ModelRegistry`, `model_resolver`, and `model_selection` each via a dedicated real test binary — filesystem checks, checksum match/mismatch/case-insensitivity, corruption detection, import/dedup, lookup, direct-path passthrough, neither/both-provided rejection, id-not-found vs. registry-corrupted as distinct errors, real identity-based resolution/selection, determinism across repeated calls, and checks that neither resolution nor selection ever mutates the registry.
+- `src/core/config.cpp` and `src/core/model_selection.cpp` compiled and their test suites run for real, no llama.cpp dependency. `src/core/runtime.cpp`, `src/api/edge_mind_api.cpp`, and `src/cli/main.cpp` were **syntax-checked** (`g++ -fsyntax-only`) — genuinely llama.cpp-independent checks for `runtime.cpp` and `main.cpp` (both only depend on forward-declared/opaque types), not stub-dependent. `src/inference/inference_engine.cpp` (including `unload()` and the new `context_state()`) was syntax-checked against the same hand-written stub `llama.h` used throughout this project, never a real linked llama.cpp.
+- 12/12 real test binaries pass in this sandbox as of Phase 4, zero regressions against everything Phase 0–3/v0.3.0/v0.5.0 already established.
 
-**What was NOT validated (same limitation as every prior phase in this project):** this sandbox has no `.git` (never a real clone), no `cmake` binary (network-blocked package install, confirmed repeatedly), and no real llama.cpp link. `cmake -S . -B build`, `ctest --test-dir build --output-on-failure`, `git diff --check`, and any Android/Termux/real-hardware run — **including the unload/reload lifecycle actually exercised against a real, linked llama.cpp** — are all pending the maintainer's own environment. This is explicitly the biggest open item for v0.5.0: the double-load leak fix and the unload/reload cycle are exactly the kind of resource-lifecycle code that most needs real-hardware confirmation and least benefits from sandbox syntax-checking alone.
+**What was NOT validated in this sandbox:** no `.git`, no `cmake` binary, no real llama.cpp link — same limitation as every prior phase.
+
+**What real Termux hardware HAS confirmed, precisely** (per the maintainer's explicit v0.5.0-alpha report, external to this sandbox): llama.cpp compiled and linked successfully on Android/Termux ARM64; SYJ EdgeMind core and CLI built successfully; the registered 14-test CTest suite passed 14/14.
+
+**What real Termux hardware has explicitly NOT yet confirmed, and remains PENDING** (per the maintainer's own correction — not to be silently counted as closed by either v0.5.0 or Phase 4): a real GGUF **load → unload → reload** sequence exercised against the actual linked llama.cpp runtime. The double-load leak fix and the unload/reload cycle are exactly the kind of resource-lifecycle code most in need of that specific validation and least served by a passing CTest suite whose 14 tests don't happen to exercise that exact sequence. This item carries forward unresolved into Phase 4 and every future milestone until an actual test performs it.

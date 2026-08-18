@@ -4,8 +4,11 @@
 #include <sstream>
 
 #include "core/runtime.h"
+#include "core/model_selection.h"
 #include "model/model_registry.h"
 
+using syj::edgemind::CliModelSelectionOutcome;
+using syj::edgemind::CliModelSelectionResult;
 using syj::edgemind::ModelRegistry;
 using syj::edgemind::RegistryEntry;
 using syj::edgemind::RegistryLoadResult;
@@ -203,6 +206,33 @@ size_t syj_edgemind_get_verification_report(const syj_edgemind_runtime* runtime,
     return report.size();
 }
 
+syj_edgemind_selection_outcome syj_edgemind_select_model(const char* registry_path, char* out_selected_model_id,
+                                                          size_t out_selected_model_id_buf_size) {
+    if (out_selected_model_id_buf_size > 0 && out_selected_model_id != nullptr) {
+        out_selected_model_id[0] = '\0';
+    }
+    const std::string path = (registry_path != nullptr) ? registry_path : RuntimeConfig{}.model_registry_path;
+    const CliModelSelectionResult selection = syj::edgemind::select_model_for_cli(path);
+
+    switch (selection.outcome) {
+        case CliModelSelectionOutcome::NoRegisteredModels:
+            return SYJ_EDGEMIND_SELECTION_NO_REGISTERED_MODELS;
+        case CliModelSelectionOutcome::MultipleModelsRequireChoice:
+            return SYJ_EDGEMIND_SELECTION_MULTIPLE_MODELS_REQUIRE_CHOICE;
+        case CliModelSelectionOutcome::SingleModelSelected: {
+            const std::string& id = selection.selected_entry.model_id;
+            if (out_selected_model_id_buf_size > 0 && out_selected_model_id != nullptr) {
+                const size_t to_copy =
+                    (id.size() < out_selected_model_id_buf_size - 1) ? id.size() : (out_selected_model_id_buf_size - 1);
+                std::memcpy(out_selected_model_id, id.data(), to_copy);
+                out_selected_model_id[to_copy] = '\0';
+            }
+            return SYJ_EDGEMIND_SELECTION_SINGLE_MODEL_SELECTED;
+        }
+    }
+    return SYJ_EDGEMIND_SELECTION_NO_REGISTERED_MODELS; // unreachable if the enum stays exhaustive above
+}
+
 size_t syj_edgemind_list_models(const char* registry_path, char* out_buf, size_t buf_size) {
     // Same default-resolution source as to_cpp_config() — RuntimeConfig's
     // own default member initializer, not a second hardcoded literal.
@@ -228,6 +258,22 @@ size_t syj_edgemind_list_models(const char* registry_path, char* out_buf, size_t
             << verification_status_message(entry.verification_status) << "\n";
     }
     const std::string report = oss.str();
+    if (buf_size > 0 && out_buf != nullptr) {
+        const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
+        std::memcpy(out_buf, report.data(), to_copy);
+        out_buf[to_copy] = '\0';
+    }
+    return report.size();
+}
+
+size_t syj_edgemind_get_context_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size) {
+    if (runtime == nullptr) {
+        if (buf_size > 0 && out_buf != nullptr) {
+            out_buf[0] = '\0';
+        }
+        return 0;
+    }
+    const std::string report = runtime->runtime.context_report();
     if (buf_size > 0 && out_buf != nullptr) {
         const size_t to_copy = (report.size() < buf_size - 1) ? report.size() : (buf_size - 1);
         std::memcpy(out_buf, report.data(), to_copy);

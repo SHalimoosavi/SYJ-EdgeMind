@@ -1,5 +1,7 @@
 #include "core/runtime.h"
 
+#include <sstream>
+
 #include "model/model_registry.h"
 
 namespace syj::edgemind {
@@ -246,6 +248,21 @@ std::string Runtime::usage_report() const {
         return "No usage data available yet — call load() first.";
     }
     return usage_manager_->usage_report(to_usage_policy(config_));
+}
+
+std::string Runtime::context_report() const {
+    if (!engine_) {
+        return "No context data available yet — call load() first.";
+    }
+    const InferenceEngine::ContextState state = engine_->context_state();
+    if (!state.available) {
+        return "No model is currently loaded.";
+    }
+    std::ostringstream oss;
+    oss << "Context capacity: " << state.n_ctx << " tokens\n";
+    oss << "Used:             " << state.n_used << " tokens\n";
+    oss << "Remaining:        " << state.n_remaining << " tokens\n";
+    return oss.str();
 }
 
 } // namespace syj::edgemind

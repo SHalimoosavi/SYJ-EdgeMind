@@ -118,6 +118,13 @@ public:
     // same "inspectable regardless of outcome" posture as memory_report().
     std::string verification_report() const { return last_verification_diagnostic_; }
 
+    // Phase 4. Read-only context-usage report for the CLI's /context
+    // command — forwards InferenceEngine::context_state() (which itself
+    // only forwards ContextManager, never recomputing anything). Reports
+    // "not loaded" if the Runtime never successfully loaded a model or has
+    // since been unload()ed — same posture as model_info().
+    std::string context_report() const;
+
     // Machine-readable classification of the outcome of the most recent
     // load() or generate() call — the explicit, non-string-matching
     // source of truth the C API status mapping is built from.

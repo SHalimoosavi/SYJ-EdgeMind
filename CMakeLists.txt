@@ -88,6 +88,7 @@ endif()
 add_library(syj-edgemind-core STATIC
     src/core/config.cpp
     src/core/runtime.cpp
+    src/core/model_selection.cpp
     src/tokenizer/tokenizer.cpp
     src/context/context_manager.cpp
     src/memory/memory_estimator.cpp

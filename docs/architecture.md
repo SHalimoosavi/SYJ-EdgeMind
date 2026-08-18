@@ -34,7 +34,8 @@ There is exactly one inference core. Platform layers (`platform/windows`, `platf
 - `src/context/` — context/token accounting and truncation strategy (Phase 1/2)
 - `src/tokenizer/` — tokenizer wrapper (Phase 1)
 - `src/api/` — the single stable C API every platform wrapper calls (Phase 1). `edge_mind_api.cpp`'s `to_c_status()` maps `RuntimeError` -> `syj_edgemind_status` via an exhaustive switch, kept in sync with `RuntimeError` by the compiler (missing a case is a warning under this project's strict-warnings build config).
-- `src/cli/` — Windows/desktop CLI entry point (Phase 1, hardened in Phase 4)
+- `src/cli/` — Windows/desktop CLI entry point (Phase 1; hardened for non-expert use in Phase 4 — **implemented**, external Android/Termux validation pending. Includes only `api/edge_mind_api.h`, deliberately never an internal C++ header directly — this is what "the Windows platform layer wraps this same C API" means in practice; Phase 4's registry auto-selection logic lives in `src/core/model_selection.*` for exactly this reason, not in `src/cli/` itself)
+- `src/core/model_selection.*` — Phase 4: deterministic 0/1/2+ model-registry auto-selection, read-only, llama.cpp-independent
 - `platform/windows/` — Windows-specific build notes and packaging (Phase 5)
 - `platform/ios/` — Objective-C++/Swift bridge over the C API (Phase 6/7)
 

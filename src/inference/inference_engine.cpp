@@ -184,6 +184,18 @@ void InferenceEngine::reset_context() {
     }
 }
 
+InferenceEngine::ContextState InferenceEngine::context_state() const {
+    ContextState state;
+    if (!context_manager_) {
+        return state; // available stays false — nothing loaded
+    }
+    state.available = true;
+    state.n_ctx = context_manager_->n_ctx();
+    state.n_used = context_manager_->n_used();
+    state.n_remaining = context_manager_->n_remaining();
+    return state;
+}
+
 EngineError InferenceEngine::generate(const std::string& prompt, const TokenStreamCallback& on_token) {
     if (!is_loaded() || !tokenizer_ || !context_manager_) {
         return EngineError::ContextCreateFailed;

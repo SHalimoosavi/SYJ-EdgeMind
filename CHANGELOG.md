@@ -5,6 +5,20 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Phase 4 (v0.6.0-alpha): Production CLI
+
+- New `src/core/model_selection.h/.cpp`: deterministic, read-only 0/1/2+ registry auto-selection for the "neither --model nor --model-id given" case. Placed in `src/core/` rather than `src/cli/` — `src/cli/main.cpp` is architecturally restricted to including only `api/edge_mind_api.h`, never an internal C++ header directly, so this is exposed to the CLI via a new C API function instead
+- New C API: `syj_edgemind_select_model()` (0/1/2+ outcome enum + selected identity), `syj_edgemind_get_context_report()`. Both purely additive — `syj_edgemind_config`'s layout was NOT changed for Phase 4, per explicit constraint
+- `InferenceEngine::ContextState`/`context_state()`, `Runtime::context_report()`: read-only forwarding of `ContextManager`'s already-tracked `n_ctx`/`n_used`/`n_remaining` — no new accounting logic, `ContextManager` itself untouched
+- CLI: when neither `--model` nor `--model-id` is given, the registry is now consulted deterministically — 0 entries gives actionable guidance, exactly 1 auto-selects with an explicit printed confirmation of which model and why (never silent), 2+ prints the full listing and requires an explicit choice, never a guess. Auto-selection sets `model_id` and proceeds through the exact same v0.5.0 resolution → verification → admission → load pipeline as a manually-typed `--model-id` — never a shortcut around it. New `/context` interactive command
+- Tests: `tests/unit/test_model_selection.cpp` — 12 real checks (zero/corrupted-registry collapse to the same guidance, single-entry auto-selection with real identity, 2-entry rejection with no guess, determinism across repeated calls, and a check that selection never mutates the registry)
+
+### Known limitations (Phase 4)
+
+- Not build-verified against real llama.cpp in the sandbox used to implement this. `model_selection` and `config` were compiled and their tests run for real (12/12 real test binaries pass, zero regressions against everything Phase 0–3/v0.3.0/v0.5.0 already established); `Runtime`/`InferenceEngine`/C API/CLI integration were syntax-checked only.
+- The v0.5.0 real-GGUF load → unload → reload lifecycle test explicitly remains PENDING. Real Termux confirmed llama.cpp compiles/links and the existing 14-test suite passes on real Android/Termux ARM64 hardware — but per explicit correction, no test in that suite exercises the load→unload→reload sequence against an actual linked model yet. This is not being counted as closed by Phase 4's completion.
+- `/context` reports "No model is currently loaded" identically whether a model was never loaded or was explicitly `/unload`ed — this distinction wasn't judged worth a separate state for a read-only diagnostic command.
+
 ### Added — v0.5.0: Runtime Model Loading & Inference Integration
 
 - New `src/model/model_resolver.h/.cpp`: pure, llama.cpp-independent resolution of `model_path` OR `model_id` (registry lookup by content-hash identity) down to a single filesystem path. Deliberately does NOT verify, hash, parse GGUF, touch llama.cpp, perform memory/usage admission, or mutate the registry — every one of those stays exactly where it already lived (`ModelVerifier`, `ModelRegistry::import_model`, `MemoryBudgetPolicy`, `UsageManager`). Read-only with respect to the registry (uses the existing `ModelRegistry::load()`, never `import_model()`)

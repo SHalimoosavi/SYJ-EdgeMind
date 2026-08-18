@@ -27,10 +27,11 @@
 - [Roadmap at a glance](#roadmap-at-a-glance)
 - [Features](#features)
 - [Architecture](#architecture)
-- [Model verification pipeline (Phase 3)](#model-verification-pipeline-phase-3)
+- [Model resolution & verification pipeline](#model-resolution--verification-pipeline)
 - [Supported hardware](#supported-hardware)
 - [Installation](#installation)
-- [Usage](#usage)
+- [Quickstart: zero to first response](#quickstart-zero-to-first-response)
+- [CLI flag reference](#cli-flag-reference)
 - [CLI commands](#cli-commands)
 - [Model management & verification](#model-management--verification)
 - [Memory management](#memory-management)
@@ -55,7 +56,8 @@ flowchart LR
     P1 --> P2["Phase 2<br/>Memory Safety"]:::implemented
     P2 --> PQ["v0.3.0<br/>Usage / Quota"]:::implemented
     PQ --> P3["Phase 3<br/>Model Registry<br/>and Verification"]:::implemented
-    P3 --> P4["Phase 4<br/>Production CLI"]:::planned
+    P3 --> V5["v0.5.0<br/>Runtime Loading<br/>and Inference"]:::implemented
+    V5 --> P4["Phase 4<br/>Production CLI"]:::implemented
     P4 --> P5["Phase 5<br/>Windows Packaging"]:::planned
     P5 --> P6["Phase 6<br/>iOS Bridge"]:::planned
     P6 --> P7["Phase 7<br/>iOS UI"]:::planned
@@ -69,7 +71,7 @@ flowchart LR
     classDef planned fill:#30363d,stroke:#6e7681,color:#c9d1d9
 ```
 
-🟢 **Confirmed on real hardware** &nbsp;•&nbsp; 🟠 **Implemented, sandbox-validated, real-hardware validation pending** &nbsp;•&nbsp; ⚪ **Not started**
+🟢 **Confirmed on real hardware** &nbsp;•&nbsp; 🟠 **Implemented, sandbox-validated, specific real-hardware items pending (see table below — never rounded up to "done")** &nbsp;•&nbsp; ⚪ **Not started**
 
 Full detail, exact test counts, and per-phase acceptance criteria: [ROADMAP.md](ROADMAP.md).
 
@@ -104,17 +106,19 @@ flowchart TD
 
 There is exactly **one** inference core. Platform layers (`platform/windows`, `platform/ios`) are thin wrappers over `src/api/edge_mind_api.h` and must never contain their own inference logic. Full component breakdown: [docs/architecture.md](docs/architecture.md).
 
-## 🔐 Model verification pipeline (Phase 3)
+## 🔐 Model resolution & verification pipeline
 
-Every model path — whether passed via `--model`, imported explicitly, or reloaded — goes through the same gate before it can ever reach `llama_model_load_from_file()`:
+Every model load — direct `--model <path>`, `--model-id <sha256>`, or Phase 4's zero-flag auto-selection — funnels through the exact same gate before anything can reach `llama_model_load_from_file()`:
 
 ```mermaid
 flowchart TD
-    A["RuntimeConfig"] --> B{"Config Validation"}
+    A["RuntimeConfig<br/>model_path OR model_id"] --> B{"Config Validation"}
     B -->|invalid| X1["❌ InvalidConfig"]
     B -->|valid| C{"Usage / Quota<br/>Admission"}
     C -->|denied| X2["❌ QuotaExceeded"]
-    C -->|allowed| D1{"Filesystem Checks"}
+    C -->|allowed| R1{"Resolution<br/><sub>model_id → registry lookup,<br/>or model_path direct</sub>"}
+    R1 -->|reject| X0["❌ NeitherProvided / BothProvided<br/>ModelIdNotFound / RegistryUnreadable"]
+    R1 -->|resolved path| D1{"Filesystem Checks"}
 
     subgraph VERIFY["🔍 Model Verification — independent of llama.cpp"]
         D1 -->|reject| X3["❌ NotFound / NotRegularFile<br/>Unreadable / Empty"]
@@ -132,8 +136,10 @@ flowchart TD
     F --> G["Inference / Streaming Generation"]
 
     classDef reject fill:#8b1c1c,stroke:#5c1010,color:#fff
-    class X1,X2,X3,X4,X5,X6 reject
+    class X0,X1,X2,X3,X4,X5,X6 reject
 ```
+
+**Resolving by identity is never a shortcut.** Whether a path came directly from `--model`, was looked up from `--model-id`, or was auto-selected by Phase 4's zero-flag convenience (see [below](#quickstart-zero-to-first-response)), the resolved path is re-verified through the exact same structural validation and re-hashed every single time — nothing is ever trusted from a cached "this was verified once" flag.
 
 **GGUF structural validation is deliberately independent of llama.cpp** — it parses the public GGUF binary format directly, so a corrupted or adversarial file is rejected *before* llama.cpp's own parser ever sees it. Every declared length/count in the file is bounds-checked against a sane ceiling *and* the file's actual size before any read is attempted — an adversarial file claiming a multi-exabyte string is rejected in constant time, never attempted as an allocation. Full design, security properties, and known limitations: [docs/model-registry.md](docs/model-registry.md).
 
@@ -180,13 +186,152 @@ Not yet available (see [ROADMAP.md](ROADMAP.md), Phase 6–7).
 
 </details>
 
-## Usage
+## 🚀 Quickstart: zero to first response
+
+A complete, concrete walkthrough — every command shown actually reflects what the CLI does, not an idealized version of it.
+
+<details open>
+<summary><strong>Step 1 — Build</strong></summary>
+
+<br>
 
 ```bash
-./build/syj-edgemind --model /path/to/model.gguf --context 1024 --threads 4 --max-tokens 256
+git clone https://github.com/SHalimoosavi/SYJ-EdgeMind.git
+cd SYJ-EdgeMind
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build --output-on-failure
 ```
 
-Omit a trailing prompt to start interactive mode instead of a single-shot response. Run `--help` for the full option list, including the memory-budget, usage-quota, and model-verification flags (`--memory-budget`, `--safety-reserve`, `--time-limit-minutes`, `--message-limit`, `--token-limit`, `--checksum`, `--registry-path`, ...).
+The binary lands at `./build/syj-edgemind` (exact path may vary slightly by platform/generator — check your build's output).
+
+</details>
+
+<details open>
+<summary><strong>Step 2 — Run with no model yet (see the guidance, not a crash)</strong></summary>
+
+<br>
+
+The very first time, you have nothing registered:
+
+```bash
+./build/syj-edgemind
+```
+
+```text
+ERROR: no model specified, and nothing is registered yet.
+
+Either:
+  --model <path>      point at a local GGUF file directly, or
+  --model-id <sha256>  load a model you've already imported (see --list-models)
+
+To import a model for the first time, run with --model <path> once —
+it will be verified and registered automatically.
+```
+
+Deterministic, actionable, exit code `2` — never a stack trace, never a silent guess.
+
+</details>
+
+<details open>
+<summary><strong>Step 3 — Import and run your first model</strong></summary>
+
+<br>
+
+```bash
+./build/syj-edgemind --model /path/to/your-model.gguf --context 1024 --threads 4
+```
+
+This single command does all of the following, in order, before a single token is generated — see the [pipeline diagram](#model-resolution--verification-pipeline) above for the exact gate each step passes through:
+
+1. Verifies the file's GGUF structure (independent of llama.cpp)
+2. Computes its SHA-256 identity
+3. Registers it locally (`.syj_edgemind_model_registry` by default)
+4. Runs the memory-admission check against your configured budget
+5. Loads it and starts the interactive session
+
+Omit a trailing prompt (as above) for interactive mode; add one (`... "What is the capital of France?"`) for a single-shot response that exits when done.
+
+</details>
+
+<details open>
+<summary><strong>Step 4 — Run it again with zero flags (Phase 4 auto-selection)</strong></summary>
+
+<br>
+
+Now that exactly one model is registered:
+
+```bash
+./build/syj-edgemind
+```
+
+```text
+No --model/--model-id given; exactly one model is registered — using it:
+  model_id=3f9a1c...  (your model's real SHA-256, shown in full)
+```
+
+Never silent — you always see exactly which model was picked and why. The selection is fed through the *same* resolution → verification → admission → load pipeline a manually-typed `--model-id` would go through, not a shortcut.
+
+</details>
+
+<details>
+<summary><strong>Step 5 — Import a second model, see the "must choose" behavior</strong></summary>
+
+<br>
+
+```bash
+./build/syj-edgemind --model /path/to/another-model.gguf
+# ...then, with two models now registered:
+./build/syj-edgemind
+```
+
+```text
+ERROR: no model specified, and more than one is registered — SYJ EdgeMind will not guess which one you mean.
+
+Registered models:
+3f9a1c...  your-model.gguf  [llama  Q4_K_M]  Model verified successfully.
+7b2e08...  another-model.gguf  [llama  Q5_K_M]  Model verified successfully.
+
+Choose one with --model-id <sha256> (or point at a file directly with --model).
+```
+
+SYJ EdgeMind never guesses among ambiguous candidates — this is a hard design rule, not a missing feature.
+
+</details>
+
+<details>
+<summary><strong>Step 6 — Browse the registry without loading anything</strong></summary>
+
+<br>
+
+```bash
+./build/syj-edgemind --list-models
+```
+
+Works standalone — no `--model`/`--model-id` required, and nothing is loaded into memory just to list what's available.
+
+</details>
+
+## CLI flag reference
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--model <path>` | Load a local GGUF file directly | — |
+| `--model-id <sha256>` | Load an already-registered model by identity (mutually exclusive with `--model`) | — |
+| `--list-models` | List the registry and exit (no model load) | — |
+| `--context <n>` | Context size in tokens | `1024` |
+| `--threads <n>` | CPU threads | hardware concurrency |
+| `--max-tokens <n>` | Max tokens to generate per response | see `--help` |
+| `--memory-budget <mb>` | Total memory budget for model+context | `3000` |
+| `--safety-reserve <mb>` | Reserved headroom subtracted from the budget | `300` |
+| `--checksum <sha256>` | Expected checksum to verify the model against | — |
+| `--registry-path <path>` | Local registry file location | `.syj_edgemind_model_registry` |
+| `--time-limit-minutes <n>` | Session time quota | unlimited |
+| `--message-limit <n>` | Message quota per period | unlimited |
+| `--token-limit <n>` | Token quota per period | unlimited |
+| `--reset-period-hours <n>` | Quota reset period | `24` |
+| `--usage-state-path <path>` | Local usage-state file location | `.syj_edgemind_usage_state` |
+| `-h`, `--help` | Full option list, always current | — |
 
 ## CLI commands
 
@@ -197,16 +342,19 @@ Interactive mode supports:
 | `/help` | interactive command list |
 | `/info` | loaded model info (params, size, context, threads) — from **llama.cpp**, after load |
 | `/verify` | model-verification report — from **SYJ EdgeMind's own GGUF reader**, independent of llama.cpp |
+| `/models` | every model in the local registry (id, name, architecture, quantization, verification status) |
 | `/memory` | memory-budget diagnostic from the last load |
+| `/context` | context capacity / used / remaining tokens — read-only, forwards `ContextManager`'s already-tracked state |
 | `/usage` | current usage, remaining quota, and reset time |
 | `/reset` | clear the context and start fresh |
+| `/unload` | release the loaded model (one-way in this release — restart to load a different one) |
 | `/quit` | exit |
-
-`/context` (richer context diagnostics) is planned for Phase 4.
 
 ## Model management & verification
 
 Point `--model` at a local GGUF file — SYJ EdgeMind verifies its structure, computes a deterministic SHA-256 identity, optionally checks it against `--checksum`, and records it in a local registry (`--registry-path`, default `.syj_edgemind_model_registry`) before it is ever loaded into inference. An invalid, corrupted, or checksum-mismatched file never reaches `llama.cpp`. There is no model downloader or catalogue — import is local-file-only by design; see [docs/model-registry.md](docs/model-registry.md) for why, and for the full pipeline, data model, and duplicate-import behavior.
+
+Once something is registered, you rarely need `--model` again: `--model-id <sha256>` loads by identity, `--list-models`/`/models` browse the registry, and running with **no flags at all** triggers Phase 4's deterministic auto-selection (0 registered → guidance, exactly 1 → auto-selected with an explicit confirmation, 2+ → an explicit choice is required, never guessed) — see the [Quickstart](#quickstart-zero-to-first-response) above for it in action.
 
 ## Memory management
 
@@ -226,20 +374,29 @@ An optional, entirely local and offline usage guard — **not** a licensing or s
 | Subsystem | Sandbox compile | Sandbox tests (real, run) | Real hardware |
 |---|:---:|:---:|:---:|
 | Core runtime (Phase 1) | ✅ | — | 🟢 **Confirmed** — Android/Termux, `SmolLM2-135M-Instruct-Q4_K_M.gguf`, tag `v0.1.1` |
-| Memory safety engine (Phase 2) | ✅ | ✅ pure/policy modules | 🟠 Pending |
-| Usage / quota manager (v0.3.0) | ✅ | ✅ 8/8 | 🟠 Pending |
-| Model registry & verification (Phase 3) | ✅ | ✅ 4/4 new binaries (see below) | 🟠 Pending |
+| Memory safety engine (Phase 2) | ✅ | ✅ pure/policy modules | 🟡 build/link confirmed, see note below |
+| Usage / quota manager (v0.3.0) | ✅ | ✅ 8/8 | 🟡 build/link confirmed, see note below |
+| Model registry & verification (Phase 3) | ✅ | ✅ 4/4 binaries | 🟡 build/link confirmed, see note below |
+| Runtime loading & inference integration (v0.5.0) | ✅ | ✅ 11/11 | 🟡 build/link confirmed, see note below |
+| Production CLI (Phase 4) | ✅ | ✅ 12/12 | ⚪ Pending |
 
-**Phase 3 test detail** — all built and run for real in this project's development sandbox:
+🟡 = real Android/Termux ARM64 build confirmed llama.cpp compiles and links, and the registered CTest suite passed (14/14 at the v0.5.0-alpha release) — **but this is not the same claim as every specific behavior having been hardware-exercised.** See the callout immediately below for the one item this project is explicitly *not* rounding up.
+
+> **⚠️ Explicitly open: the real-GGUF load → unload → reload lifecycle has NOT yet been hardware-tested.**
+> Real Termux hardware has confirmed llama.cpp compiles and links, SYJ EdgeMind's core and CLI build successfully, and the existing CTest suite passes in full. It has **not** confirmed that the specific `load()` → `unload()` → `load()` sequence — including the double-load resource-leak fix introduced in v0.5.0 — behaves correctly against a real, linked model. No test currently in the suite exercises that exact sequence. This stays open until a test explicitly does.
+
+**Test detail** — all built and run for real in this project's development sandbox:
 
 - `test_gguf_reader` — 12 real, byte-correct GGUF fixtures (valid v2/v3, invalid magic, truncated header/metadata, empty, two adversarial "absurd declared length" cases, unknown type code, missing-key handling, nonexistent path)
 - `test_model_hash` — real NIST/FIPS 180-4 SHA-256 known-answer vectors, cross-checked against system `sha256sum`
 - `test_model_verifier` — filesystem checks, checksum match/mismatch/case-insensitivity, directory rejection
 - `test_model_registry` — persistence round-trip, corruption detection, import/dedup, lookup
+- `test_model_resolver` (v0.5.0) — direct-path passthrough, neither/both-provided rejection, id-not-found vs. registry-corrupted as distinct errors, real identity resolution, no registry mutation
+- `test_model_selection` (Phase 4) — zero/corrupted-registry collapse to the same guidance, single-entry auto-selection with a real identity, 2-entry rejection with no guess, determinism, no registry mutation
 
-SYJ EdgeMind's llama.cpp-*independent* source (config validation, context accounting, the memory estimator/budget policy, the usage/quota subsystem, and the entire Phase 3 model-verification module) has been compiled *and its tests actually run* in the sandbox used to build this project. The parts that depend on llama.cpp (tokenizer, sampler, inference engine, memory observer, C API, CLI, `Runtime`'s integration of all of the above) were verified for syntax/API-usage correctness against the real, current llama.cpp API but could not be *linked and run* in that sandbox — it has no network access to fetch llama.cpp's source, so `cmake -S . -B build` fails at the `FetchContent` step there, not due to an error in this project's code. On a machine with normal internet access, the build commands above fetch llama.cpp automatically.
+SYJ EdgeMind's llama.cpp-*independent* source (config validation, context accounting, the memory estimator/budget policy, the usage/quota subsystem, the entire model-verification/registry/resolution/selection modules) has been compiled *and its tests actually run* in the sandbox used to build this project. The parts that depend on llama.cpp (tokenizer, sampler, inference engine, memory observer, C API, CLI, `Runtime`'s integration of all of the above) were verified for syntax/API-usage correctness against the real, current llama.cpp API but could not be *linked and run* in that sandbox — it has no network access to fetch llama.cpp's source, so `cmake -S . -B build` fails at the `FetchContent` step there, not due to an error in this project's code. On a machine with normal internet access, the build commands above fetch llama.cpp automatically.
 
-**No sandbox in this project's history has been able to run a real `cmake`/`ctest`/Android-Termux pass for the Phase 2, v0.3.0, or Phase 3 code** — only Phase 1 has that real-hardware confirmation so far. See [docs/development.md](docs/development.md) and [docs/model-registry.md](docs/model-registry.md)'s "Validation status" section for the exact line, and please report back once you've run it on real hardware — that's the one thing no sandbox has been able to do.
+See [docs/development.md](docs/development.md) and [docs/model-registry.md](docs/model-registry.md)'s "Validation status" section for the full, precise breakdown.
 
 </details>
 
@@ -249,7 +406,7 @@ See [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md). No telemetry, no hidden networking, no cloud fallback, no secrets, no API keys. Model files are treated as untrusted input — see the [verification pipeline](#model-verification-pipeline-phase-3) above.
+See [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md). No telemetry, no hidden networking, no cloud fallback, no secrets, no API keys. Model files are treated as untrusted input — see the [resolution & verification pipeline](#model-resolution--verification-pipeline) above.
 
 ## Privacy
 

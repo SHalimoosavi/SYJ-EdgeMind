@@ -137,6 +137,40 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config);
 // syj_edgemind_config field introduced after the version it recognizes.
 int32_t syj_edgemind_abi_version(void);
 
+// Phase 4. Deterministic classification for syj_edgemind_select_model()'s
+// outcome. Never a guess — see that function's comment.
+typedef enum {
+    SYJ_EDGEMIND_SELECTION_NO_REGISTERED_MODELS = 0,
+    SYJ_EDGEMIND_SELECTION_SINGLE_MODEL_SELECTED = 1,
+    SYJ_EDGEMIND_SELECTION_MULTIPLE_MODELS_REQUIRE_CHOICE = 2,
+} syj_edgemind_selection_outcome;
+
+// Phase 4. Read-only decision for the CLI's "neither --model nor
+// --model-id given" case: what to do based on what's already registered.
+// Does NOT verify, admit, register, or load anything — a pure query over
+// the existing registry (see the internal syj::edgemind::
+// select_model_for_cli, src/core/model_selection.h, which this wraps).
+//
+// - NO_REGISTERED_MODELS: out_selected_model_id is left empty (unwritten
+//   beyond a NUL terminator if buf_size > 0). Caller should print
+//   actionable guidance ("import a model with --model <path>").
+// - SINGLE_MODEL_SELECTED: out_selected_model_id is filled with the
+//   auto-selected model's identity, NUL-terminated (truncated if
+//   out_selected_model_id_buf_size is too small). Unlike the report
+//   getters above, this function returns a fixed enum, not a required
+//   size — model identities are always a 64-character SHA-256 hex string,
+//   so a caller can simply allocate a fixed 65-byte buffer (64 + NUL)
+//   rather than querying a size first. The caller should feed the result
+//   into syj_edgemind_config::model_id exactly as if the user had typed
+//   --model-id themselves, so the selection enters the SAME resolution ->
+//   verification -> admission -> load pipeline as any other model_id —
+//   never a shortcut around it.
+// - MULTIPLE_MODELS_REQUIRE_CHOICE: out_selected_model_id is left empty.
+//   Caller should call syj_edgemind_list_models() to show the choices and
+//   ask the user to pick via --model or --model-id.
+syj_edgemind_selection_outcome syj_edgemind_select_model(const char* registry_path, char* out_selected_model_id,
+                                                          size_t out_selected_model_id_buf_size);
+
 // Creates and loads a runtime. Returns NULL on failure; if out_status is
 // non-NULL, it is set to the specific failure reason.
 //
@@ -220,6 +254,13 @@ size_t syj_edgemind_get_usage_report(const syj_edgemind_runtime* runtime, char* 
 // Safe to call on a handle returned due to
 // SYJ_EDGEMIND_ERROR_MODEL_VERIFICATION_FAILED (see syj_edgemind_create).
 size_t syj_edgemind_get_verification_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size);
+
+// Phase 4. Writes the read-only context-usage report (capacity/used/
+// remaining tokens — see Runtime::context_report()) into `out_buf`, same
+// truncation/NUL-termination/snprintf-like-return-value contract as every
+// other report getter in this file. Purely additive — does not change
+// syj_edgemind_config or any existing function's signature.
+size_t syj_edgemind_get_context_report(const syj_edgemind_runtime* runtime, char* out_buf, size_t buf_size);
 
 // v0.5.0: writes a human-readable listing of every entry in the model
 // registry at `registry_path` (NULL means "use SYJ EdgeMind's default",

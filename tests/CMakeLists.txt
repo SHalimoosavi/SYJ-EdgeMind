@@ -12,6 +12,23 @@ add_executable(test_config unit/test_config.cpp)
 target_link_libraries(test_config PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_config COMMAND test_config)
 
+# Phase 4: model_selection.cpp only depends on ModelRegistry (llama.cpp-
+# independent), same dependency shape as test_model_resolver — linked the
+# same targeted way rather than pulling in the full syj-edgemind-core
+# library (and therefore llama.cpp) for a test that doesn't need it.
+add_executable(test_model_selection unit/test_model_selection.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/model_selection.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_verifier.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/gguf_reader.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_hash.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_metadata.cpp
+    ${CMAKE_SOURCE_DIR}/src/model/model_types.cpp
+)
+target_include_directories(test_model_selection PRIVATE ${CMAKE_SOURCE_DIR}/src model)
+target_link_libraries(test_model_selection PRIVATE syj_edgemind_warnings)
+add_test(NAME test_model_selection COMMAND test_model_selection)
+
 add_executable(test_context_manager unit/test_context_manager.cpp)
 target_link_libraries(test_context_manager PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_context_manager COMMAND test_context_manager)
@@ -115,4 +132,5 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
     target_link_libraries(test_model_verifier PRIVATE stdc++fs)
     target_link_libraries(test_model_registry PRIVATE stdc++fs)
     target_link_libraries(test_model_resolver PRIVATE stdc++fs)
+    target_link_libraries(test_model_selection PRIVATE stdc++fs)
 endif()

@@ -99,6 +99,22 @@ public:
     // exceeding the budget). Empty if load() has never been called.
     const std::string& memory_diagnostic() const { return memory_diagnostic_; }
 
+    // Phase 4. Read-only snapshot of the ALREADY-TRACKED ContextManager
+    // state (see src/context/context_manager.h) — this does not compute or
+    // duplicate anything ContextManager doesn't already own; it only
+    // forwards it. `available` is false when nothing is loaded (there is
+    // no ContextManager to read), distinguishing "not loaded" from "loaded
+    // with zero tokens used" the same way ModelMetadata's `*_present`
+    // flags distinguish "absent" from "present but zero" elsewhere in this
+    // codebase.
+    struct ContextState {
+        bool available = false;
+        int32_t n_ctx = 0;
+        int32_t n_used = 0;
+        int32_t n_remaining = 0;
+    };
+    ContextState context_state() const;
+
 private:
     llama_model* model_ = nullptr;
     llama_context* ctx_ = nullptr;

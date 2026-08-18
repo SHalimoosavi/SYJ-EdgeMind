@@ -58,6 +58,7 @@ void print_usage(const char* argv0) {
         "  /models  list every model in the local registry (id, name,\n"
         "           architecture, quantization, verification status)\n"
         "  /memory  show the memory-budget diagnostic from the last load\n"
+        "  /context show context capacity/used/remaining tokens\n"
         "  /usage   show current usage, remaining quota, and reset time\n"
         "  /reset   clear the context and start fresh\n"
         "  /unload  release the loaded model (does not load a different one —\n"
@@ -129,6 +130,17 @@ void print_memory_report(const syj_edgemind_runtime* rt) {
     std::string buf(needed + 1, '\0');
     syj_edgemind_get_memory_report(rt, buf.data(), buf.size());
     std::printf("%s\n", buf.c_str());
+}
+
+void print_context_report(const syj_edgemind_runtime* rt) {
+    const size_t needed = syj_edgemind_get_context_report(rt, nullptr, 0);
+    if (needed == 0) {
+        std::printf("No context report available.\n");
+        return;
+    }
+    std::string buf(needed + 1, '\0');
+    syj_edgemind_get_context_report(rt, buf.data(), buf.size());
+    std::printf("%s", buf.c_str());
 }
 
 void print_usage_report(const syj_edgemind_runtime* rt) {
@@ -291,9 +303,37 @@ int main(int argc, char** argv) {
     }
 
     if (model_path.empty() && model_id.empty()) {
-        std::fprintf(stderr, "ERROR: either --model <path> or --model-id <sha256> is required.\n\n");
-        print_usage(argv[0]);
-        return 2;
+        // Phase 4: rather than a bare "one of these is required" error,
+        // consult the registry and give a non-expert user a deterministic,
+        // actionable next step. This NEVER guesses among multiple
+        // candidates — see syj_edgemind_select_model()'s contract.
+        char selected_id_buf[65]; // SHA-256 hex (64) + NUL
+        const syj_edgemind_selection_outcome selection =
+            syj_edgemind_select_model(config.model_registry_path, selected_id_buf, sizeof(selected_id_buf));
+
+        if (selection == SYJ_EDGEMIND_SELECTION_NO_REGISTERED_MODELS) {
+            std::fprintf(stderr,
+                         "ERROR: no model specified, and nothing is registered yet.\n\n"
+                         "Either:\n"
+                         "  --model <path>      point at a local GGUF file directly, or\n"
+                         "  --model-id <sha256>  load a model you've already imported (see --list-models)\n\n"
+                         "To import a model for the first time, run with --model <path> once —\n"
+                         "it will be verified and registered automatically.\n");
+            return 2;
+        }
+        if (selection == SYJ_EDGEMIND_SELECTION_MULTIPLE_MODELS_REQUIRE_CHOICE) {
+            std::fprintf(stderr,
+                         "ERROR: no model specified, and more than one is registered — "
+                         "SYJ EdgeMind will not guess which one you mean.\n\n"
+                         "Registered models:\n");
+            print_models_list(config.model_registry_path);
+            std::fprintf(stderr, "\nChoose one with --model-id <sha256> (or point at a file directly with --model).\n");
+            return 2;
+        }
+        // SYJ_EDGEMIND_SELECTION_SINGLE_MODEL_SELECTED
+        model_id = selected_id_buf;
+        std::printf("No --model/--model-id given; exactly one model is registered — using it:\n  model_id=%s\n",
+                    model_id.c_str());
     }
     if (!model_path.empty() && !model_id.empty()) {
         // No precedence rule exists for this case — see
@@ -401,7 +441,7 @@ int main(int argc, char** argv) {
         if (line == "/quit") {
             break;
         } else if (line == "/help") {
-            std::printf("Commands: /help  /info  /verify  /models  /memory  /usage  /reset  /unload  /quit\n");
+            std::printf("Commands: /help  /info  /verify  /models  /memory  /context  /usage  /reset  /unload  /quit\n");
             continue;
         } else if (line == "/models") {
             print_models_list(config.model_registry_path);
@@ -420,6 +460,9 @@ int main(int argc, char** argv) {
             continue;
         } else if (line == "/memory") {
             print_memory_report(rt);
+            continue;
+        } else if (line == "/context") {
+            print_context_report(rt);
             continue;
         } else if (line == "/usage") {
             print_usage_report(rt);
