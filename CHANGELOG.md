@@ -5,6 +5,25 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Phase 5: Windows Packaging
+
+- `scripts/build-windows.ps1` (new, authoritative): CMake configure + build for Windows, with explicit `-EnableAVX`/`-EnableAVX2` CPU-mode switches (default: Portable — `GGML_NATIVE=OFF`, `GGML_AVX=OFF`, `GGML_AVX2=OFF`). Verifies `cmake`/`git` are on PATH, supports `-Clean`/`-BuildDir`/`-Config`, prints the selected CPU mode and resulting build directory
+- `scripts/build-windows.bat` (new): thin `cmd.exe` entry point delegating to `build-windows.ps1` — not a second build implementation
+- **Narrowly-scoped persistence portability fix**, applied to exactly the two pre-approved call sites: `ModelRegistry::save()` (`src/model/model_registry.cpp`) and `UsageStateStore::save()` (`src/usage/usage_state_store.cpp`) now use a `MoveFileExA`/`MOVEFILE_REPLACE_EXISTING`-based replacement operation under `#ifdef _WIN32` for the final temp-file-replace step, designed to preserve the same atomic-write intent as the existing POSIX `std::rename` path (not claimed as an unconditional filesystem-level atomicity guarantee in every Windows storage configuration — see `platform/windows/README.md`). This addresses a previously-documented gap: Windows' `std::rename` fails rather than replacing an existing destination file, unlike POSIX. The POSIX `std::rename` path is byte-for-byte unchanged; nothing else in either file (format, validation, error contract, public API) was touched
+- `CMakeLists.txt` was **not** modified — CPU-mode flags (`GGML_NATIVE`/`GGML_AVX`/`GGML_AVX2`, all real, verified-live upstream ggml options, not invented) are passed by the build scripts at configure time; the existing FetchContent-based llama.cpp dependency needed no changes to accept them
+- Docs: `platform/windows/README.md` rewritten from placeholder to real content; `docs/supported-platforms.md` Windows section rewritten with the CPU-mode table and persistence-fix note; `scripts/README.md`'s stale "Phase 3 downloader" references corrected to reflect Phase 3's actual, already-decided local-import-only design
+
+### Fixed — Phase 5 (found via external pre-release review)
+
+- `scripts/build-windows.ps1`: `Write-Error` calls (three sites: the required-tool check, the configure-failure check, the build-failure check) were replaced with `Write-Host`. Under `$ErrorActionPreference = "Stop"`, `Write-Error` is itself a terminating call, which was not guaranteed to let the following `exit <code>` statement run — meaning the script's documented exit-code propagation was not actually reliable. Exit codes are now captured into a local variable immediately after the triggering command, before any other cmdlet runs
+- `scripts/build-windows.ps1`: architecture is now explicitly pinned via `-A x64` (this project's only documented Windows target) whenever the resolved generator supports it; a new optional `-Generator` parameter allows pinning a specific Visual Studio version for a fully deterministic configure, without hardcoding one by default — the project's documentation commits only to "MSVC," never a specific VS release, so defaulting to a specific version would have invented an undocumented constraint
+
+### Known limitations (Phase 5)
+
+- **No real Windows/MSVC build or runtime execution has been performed.** Both scripts were written and hand-reviewed but could not be executed or parser-validated — no PowerShell/cmd.exe interpreter is available in the sandbox that built this. This is explicitly not claimed as hardware-confirmed; report back once run on real Windows.
+- The pinned ggml/llama.cpp build performs compile-time instruction-set selection only — there is no runtime CPU-feature dispatch. An AVX/AVX2-mode binary will not detect or fall back on a CPU that lacks that instruction set; this is a dependency limitation, not a SYJ EdgeMind omission, and no custom CPUID/dispatch layer was built to work around it (out of scope, and not required by the actual repository architecture).
+- The v0.5.0 real-GGUF load → unload → reload lifecycle test remains explicitly PENDING, unaffected by and not resolved by this phase's work — see the v0.5.0/Phase 4 entries below.
+
 ### Added — Phase 4 (v0.6.0-alpha): Production CLI
 
 - New `src/core/model_selection.h/.cpp`: deterministic, read-only 0/1/2+ registry auto-selection for the "neither --model nor --model-id given" case. Placed in `src/core/` rather than `src/cli/` — `src/cli/main.cpp` is architecturally restricted to including only `api/edge_mind_api.h`, never an internal C++ header directly, so this is exposed to the CLI via a new C API function instead

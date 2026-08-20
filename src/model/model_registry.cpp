@@ -8,6 +8,10 @@
 #include <map>
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "model/model_metadata.h"
 #include "model/model_verifier.h"
 
@@ -88,6 +92,7 @@ const char* kFieldOrder[] = {
     "model_id", "display_name", "local_path", "file_size_bytes", "format",
     "architecture", "quantization", "verification_status", "verified_at_unix", "expected_checksum_sha256",
 };
+constexpr size_t kFieldCount = sizeof(kFieldOrder) / sizeof(kFieldOrder[0]);
 
 // VerificationStatus is stored as its underlying int so the format doesn't
 // depend on enumerator names; only the exact set of values this version of
@@ -214,10 +219,41 @@ bool ModelRegistry::save(const std::string& registry_path, const std::vector<Reg
         if (!out.good()) return false;
     } // closed before rename, required on some platforms
 
+    // Replacement operation designed to preserve the existing atomic-write
+    // intent, though the actual guarantee differs by platform.
+    // std::rename()'s behavior when the destination already exists is NOT
+    // identical across platforms: POSIX guarantees an atomic replace;
+    // Windows' std::rename/_wrename instead FAILS if the destination
+    // exists (see docs/supported-platforms.md's Windows section — this
+    // was a known, documented, previously-unresolved risk, not a new
+    // assumption). MoveFileExA with MOVEFILE_REPLACE_EXISTING is the
+    // standard Win32 idiom for the same replace-onto-an-existing-
+    // destination intent; it is NOT being claimed here as an unconditional
+    // filesystem-level atomicity guarantee equivalent to POSIX rename() in
+    // every Windows storage configuration (behavior can vary by
+    // filesystem/volume, e.g. NTFS vs. network shares) — only that it
+    // preserves the same intent and, like the POSIX path, never leaves the
+    // destination in a half-written state on failure.
+    // MOVEFILE_WRITE_THROUGH forces the operation to complete (or fail)
+    // before returning, rather than returning once merely queued — closer
+    // to the POSIX call's synchronous guarantee. On failure here, the
+    // ORIGINAL registry file is left untouched (Windows does not delete
+    // the destination before the replace succeeds) and the .tmp file is
+    // cleaned up — the same fail-closed contract as the POSIX path below:
+    // never partially written, never silently lost.
+#ifdef _WIN32
+    const bool renamed = MoveFileExA(tmp_path.c_str(), registry_path.c_str(),
+                                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (!renamed) {
+        std::remove(tmp_path.c_str());
+        return false;
+    }
+#else
     if (std::rename(tmp_path.c_str(), registry_path.c_str()) != 0) {
         std::remove(tmp_path.c_str());
         return false;
     }
+#endif
     return true;
 }
 

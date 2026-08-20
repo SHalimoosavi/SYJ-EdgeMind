@@ -67,7 +67,7 @@ int main() {
         RegistryEntry e2;
         e2.model_id = std::string(64, 'b');
         e2.display_name = "";
-        e2.local_path = "/synthetic/model2.gguf";
+        e2.local_path = "/tmp/model2.gguf";
         e2.file_size_bytes = 0;
         e2.format = "gguf";
         e2.architecture = "";

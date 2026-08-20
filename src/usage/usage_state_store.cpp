@@ -6,6 +6,10 @@
 #include <map>
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace syj::edgemind {
 
 namespace {
@@ -140,14 +144,42 @@ bool UsageStateStore::save(const std::string& path, const UsageState& state) {
         }
     } // out closed here, before rename — required on some platforms
 
-    // Atomic on POSIX (Linux/Android/Termux): rename() onto an existing
-    // path replaces it atomically, so a crash between the write above and
-    // this rename leaves the OLD state file intact, never a half-written
-    // new one.
+    // Replacement operation designed to preserve the existing atomic-write
+    // intent, though the actual guarantee differs by platform. Atomic on
+    // POSIX (Linux/Android/Termux): rename() onto an existing path
+    // replaces it atomically, so a crash between the write above and this
+    // rename leaves the OLD state file intact, never a half-written new
+    // one.
+    //
+    // Windows' std::rename/_wrename does NOT share that guarantee — it
+    // fails outright if the destination already exists, rather than
+    // replacing it (see docs/supported-platforms.md's Windows section —
+    // a previously known, documented, unresolved risk, not a new
+    // assumption). MoveFileExA with MOVEFILE_REPLACE_EXISTING is the
+    // standard Win32 idiom for the same replace-onto-existing-or-not
+    // intent — it is NOT being claimed here as an unconditional
+    // filesystem-level atomicity guarantee equivalent to POSIX rename() in
+    // every Windows storage configuration (this can vary by filesystem/
+    // volume). What it does preserve, like the POSIX path: on failure the
+    // ORIGINAL state file is left untouched (Windows does not delete the
+    // destination before the replace succeeds) — never a partially-written
+    // destination, never a silently lost one. MOVEFILE_WRITE_THROUGH
+    // forces the operation to complete (or fail) before returning, rather
+    // than returning once merely queued — this is about synchronous
+    // completion, not an additional atomicity claim.
+#ifdef _WIN32
+    const bool renamed = MoveFileExA(tmp_path.c_str(), path.c_str(),
+                                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (!renamed) {
+        std::remove(tmp_path.c_str()); // best-effort cleanup; failure here doesn't change the overall result
+        return false;
+    }
+#else
     if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
         std::remove(tmp_path.c_str()); // best-effort cleanup; failure here doesn't change the overall result
         return false;
     }
+#endif
 
     return true;
 }
