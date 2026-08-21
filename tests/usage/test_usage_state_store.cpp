@@ -211,6 +211,46 @@ int main() {
         remove_if_exists(path);
     }
 
+    // Phase 6: save() a second time to a path that already holds a
+    // PREVIOUS successful save (not a fresh path) — the exact scenario
+    // Phase 5's Windows persistence fix exists for (POSIX rename()
+    // atomically replaces an existing destination; Windows'
+    // std::rename/_wrename does not, hence the MoveFileExA branch — see
+    // src/usage/usage_state_store.cpp). This test only ever compiles and
+    // runs the POSIX branch in this sandbox, so it proves the POSIX path
+    // is unaffected by that change, not that the Windows branch works —
+    // that remains real-Windows-hardware-only, as always. Confirms the
+    // LATEST save wins on reload, not a stale or corrupted intermediate
+    // state.
+    {
+        const std::string path = temp_path("double_save_existing_destination");
+        remove_if_exists(path);
+
+        UsageState first;
+        first.period_start_unix = 1111;
+        first.messages_used_this_period = 1;
+        check(UsageStateStore::save(path, first), "first save() to a fresh path succeeds");
+
+        UsageState second;
+        second.period_start_unix = 2222;
+        second.messages_used_this_period = 2;
+        check(UsageStateStore::save(path, second),
+              "second save() to the SAME, already-existing destination succeeds "
+              "(exercises replacing an existing file, not just creating a new one)");
+
+        UsageState loaded;
+        const UsageStateLoadResult load_result = UsageStateStore::load(path, &loaded);
+        check(load_result == UsageStateLoadResult::Ok, "load() after the second save succeeds");
+        check(loaded.period_start_unix == 2222 && loaded.messages_used_this_period == 2,
+              "reloaded state reflects the SECOND save, not the first — the replace actually "
+              "replaced, it didn't merge, corrupt, or silently keep the old content");
+
+        std::ifstream tmp_check2(path + ".tmp");
+        check(!tmp_check2.is_open(), "no stray .tmp file remains after the second save either");
+
+        remove_if_exists(path);
+    }
+
     if (g_failures > 0) {
         std::fprintf(stderr, "%d check(s) failed.\n", g_failures);
         return EXIT_FAILURE;

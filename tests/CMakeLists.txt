@@ -45,6 +45,17 @@ add_executable(test_invalid_model_path integration/test_invalid_model_path.cpp)
 target_link_libraries(test_invalid_model_path PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_invalid_model_path COMMAND test_invalid_model_path)
 
+# Phase 6: real load -> unload -> reload lifecycle test. Gated on
+# SYJ_EDGEMIND_TEST_MODEL_PATH — see the test file's own header comment
+# for why no existing fixture can honestly exercise this test's positive
+# path. Registered with SKIP_RETURN_CODE so ctest reports it as SKIPPED
+# (not PASSED) when no real model is configured — an environment
+# limitation must never be reported as a pass.
+add_executable(test_model_lifecycle integration/test_model_lifecycle.cpp)
+target_link_libraries(test_model_lifecycle PRIVATE syj-edgemind-core syj_edgemind_warnings)
+add_test(NAME test_model_lifecycle COMMAND test_model_lifecycle)
+set_tests_properties(test_model_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(test_memory_admission memory/test_memory_admission.cpp)
 target_link_libraries(test_memory_admission PRIVATE syj-edgemind-core syj_edgemind_warnings)
 add_test(NAME test_memory_admission COMMAND test_memory_admission)
