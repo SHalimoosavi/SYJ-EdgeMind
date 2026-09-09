@@ -28,6 +28,7 @@ endif()
 
 option(SYJ_EDGEMIND_BUILD_TESTS "Build test suite" ON)
 option(SYJ_EDGEMIND_BUILD_CLI "Build the syj-edgemind CLI executable" ON)
+option(SYJ_EDGEMIND_BUILD_DASHBOARD "Build the localhost-only SYJ EdgeMind operations dashboard" OFF)
 option(SYJ_EDGEMIND_ENABLE_WARNINGS "Enable strict warnings (-Wall -Wextra -Wpedantic / MSVC equivalent)" ON)
 option(SYJ_EDGEMIND_USE_SYSTEM_LLAMA "Use an already-configured llama.cpp target instead of FetchContent (advanced/offline builds)" OFF)
 
@@ -80,6 +81,26 @@ if(NOT SYJ_EDGEMIND_USE_SYSTEM_LLAMA)
         # manually-vendored build if that's ever needed (see third_party/README.md).
     )
     FetchContent_MakeAvailable(llama_cpp)
+endif()
+
+# ---------------------------------------------------------------------------
+# Optional dashboard dependency (never part of the core runtime)
+# ---------------------------------------------------------------------------
+if(SYJ_EDGEMIND_BUILD_DASHBOARD)
+    include(FetchContent)
+    set(HTTPLIB_TEST OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_INSTALL OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        cpp_httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+        GIT_TAG        v0.18.3
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(cpp_httplib)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -150,6 +171,24 @@ if(SYJ_EDGEMIND_BUILD_CLI)
 endif()
 
 # ---------------------------------------------------------------------------
+# Local Operations Dashboard
+# ---------------------------------------------------------------------------
+if(SYJ_EDGEMIND_BUILD_DASHBOARD)
+    add_executable(syj-edgemind-dashboard
+        src/dashboard/main.cpp
+        src/dashboard/dashboard.cpp
+    )
+    target_link_libraries(syj-edgemind-dashboard
+        PRIVATE
+            syj-edgemind-core
+            httplib::httplib
+            syj_edgemind_warnings
+    )
+    target_compile_features(syj-edgemind-dashboard PRIVATE cxx_std_17)
+    target_compile_definitions(syj-edgemind-dashboard PRIVATE SYJ_EDGEMIND_RELEASE_VERSION=\"v0.9.0-alpha\")
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 if(SYJ_EDGEMIND_BUILD_TESTS)
@@ -157,4 +196,4 @@ if(SYJ_EDGEMIND_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-message(STATUS "SYJ EdgeMind: Phase 2 configured (llama.cpp tag ${SYJ_EDGEMIND_LLAMA_CPP_TAG})")
+message(STATUS "SYJ EdgeMind: Phase 7 configured (llama.cpp tag ${SYJ_EDGEMIND_LLAMA_CPP_TAG}; dashboard=${SYJ_EDGEMIND_BUILD_DASHBOARD})")

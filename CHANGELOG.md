@@ -1,9 +1,29 @@
-# Changelog
-
 All notable changes to this project will be documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+
+### Added — Phase 7: Local Operations Dashboard
+
+
+- `src/dashboard/` — localhost-only SYJ EdgeMind operations dashboard with vanilla HTML/CSS/JS and no Node/npm/bundler.
+- Dashboard runtime operations use only `api/edge_mind_api.h`; llama.cpp and internal C++ runtime headers are not exposed to the platform-facing dashboard executable.
+- Bearer authentication backed by 256-bit OS secure entropy (`/dev/urandom` on POSIX/Android/Termux, `BCryptGenRandom` on Windows), with fail-closed startup if secure entropy is unavailable.
+- Bounded JSON request parsing and 16 KiB HTTP request-body limit.
+- Serialized runtime operations covering load, unload, reload, reset, and generation; generation keeps the runtime operation lock for the complete streamed inference lifecycle.
+- SSE generation endpoint and operational views for runtime, registered models, system memory, memory admission, usage/quota, and ABI/release information.
+- Additive C API system-memory observation: `syj_edgemind_get_system_memory()`. Unsupported live-memory platforms report `available=0` rather than claiming unlimited memory.
+- Pinned `cpp-httplib` v0.18.3 via CMake FetchContent; it is not vendored. TLS/compression features are disabled because the dashboard is loopback-only.
+- `docs/dashboard.md` documents the Phase 7 architecture, API, security boundary, concurrency model, and platform posture.
+
+### Validation status — Phase 7
+
+- Source formatting/diff checks pass.
+- Dashboard source passes standalone C++17 syntax checking against the documented cpp-httplib API surface.
+- Full ARM64/Termux Release build completed successfully with the dashboard enabled.
+- 16/16 CTest tests passed using the real SmolLM2-135M-Instruct-Q4_K_M GGUF, including the real model lifecycle test.
+- Live dashboard validation passed for authenticated API access, model load/unload/reload, SSE generation, memory/usage reporting, and `/api/version` reporting `v0.9.0-alpha`.
+
 
 ### Added — Phase 5: Windows Packaging
 

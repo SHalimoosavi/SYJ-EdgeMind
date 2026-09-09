@@ -6,6 +6,7 @@
 #include "core/runtime.h"
 #include "core/model_selection.h"
 #include "model/model_registry.h"
+#include "memory/memory_observer.h"
 
 using syj::edgemind::CliModelSelectionOutcome;
 using syj::edgemind::CliModelSelectionResult;
@@ -130,6 +131,15 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config) {
 
 int32_t syj_edgemind_abi_version(void) {
     return SYJ_EDGEMIND_ABI_VERSION;
+}
+
+void syj_edgemind_get_system_memory(syj_edgemind_system_memory_info* out_info) {
+    if (out_info == nullptr) return;
+    std::memset(out_info, 0, sizeof(*out_info));
+    const auto info = syj::edgemind::MemoryObserver::observe_system_memory();
+    out_info->available = info.available ? 1 : 0;
+    out_info->total_bytes = info.total_bytes;
+    out_info->available_bytes = info.available_bytes;
 }
 
 syj_edgemind_runtime* syj_edgemind_create(const syj_edgemind_config* config,
