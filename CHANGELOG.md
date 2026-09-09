@@ -20,7 +20,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 - Source formatting/diff checks pass.
 - Dashboard source passes standalone C++17 syntax checking against the documented cpp-httplib API surface.
-- A full repository build could not be completed in this isolated environment because the pinned llama.cpp headers/dependency were unavailable; no unsupported build or hardware-success claim is made.
+- Full ARM64/Termux Release build completed successfully with the dashboard enabled.
+- 16/16 CTest tests passed using the real SmolLM2-135M-Instruct-Q4_K_M GGUF, including the real model lifecycle test.
+- Live dashboard validation passed for authenticated API access, model load/unload/reload, SSE generation, memory/usage reporting, and `/api/version` reporting `v0.9.0-alpha`.
 
 
 ### Added — Phase 5: Windows Packaging
