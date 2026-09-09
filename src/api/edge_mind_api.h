@@ -137,6 +137,18 @@ void syj_edgemind_default_config(syj_edgemind_config* out_config);
 // syj_edgemind_config field introduced after the version it recognizes.
 int32_t syj_edgemind_abi_version(void);
 
+// Phase 7: read-only live system-memory observation through the same stable
+// C API boundary used by platform wrappers and the local dashboard.
+// `available` is 0 when the platform has no supported observer; callers must
+// treat that as unknown, never as unlimited memory.
+typedef struct syj_edgemind_system_memory_info {
+    int available;
+    uint64_t total_bytes;
+    uint64_t available_bytes;
+} syj_edgemind_system_memory_info;
+
+void syj_edgemind_get_system_memory(syj_edgemind_system_memory_info* out_info);
+
 // Phase 4. Deterministic classification for syj_edgemind_select_model()'s
 // outcome. Never a guess — see that function's comment.
 typedef enum {
